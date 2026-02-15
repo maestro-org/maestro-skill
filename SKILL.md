@@ -1,7 +1,17 @@
 ---
 name: maestro-bitcoin
 description: Comprehensive Bitcoin blockchain interaction via Maestro APIs. Supports 7 API services with 119 endpoints including blockchain indexing, Esplora compatibility, RPC access, event management, market prices, mempool monitoring, and wallet operations. Handles BTC transactions, UTXOs, addresses, blocks, metaprotocols (BRC20, Runes, Inscriptions/Ordinals), webhooks, and real-time data. Authentication supports both `api-key` headers and x402 v2 USDC payments via optional signer tooling.
+required-env-vars:
+  - MAESTRO_AUTH_MODE
+sensitive-env-vars:
+  - MAESTRO_API_KEY
+  - MAESTRO_X402_SIGNER
+  - MAESTRO_X402_PAYMENT_SIGNATURE
+  - MAESTRO_X402_SIGNER_PASSTHROUGH_VARS
+  - MAESTRO_X402_DEBUG
 metadata:
+  required-env-vars:
+    - MAESTRO_AUTH_MODE
   short-description: Maestro Bitcoin APIs with API key and x402 payment support for wallet-capable agents.
   security:
     runtime-behaviors:
@@ -17,9 +27,8 @@ metadata:
       - MAESTRO_X402_SIGNER
       - MAESTRO_X402_PAYMENT_SIGNATURE
       - MAESTRO_AUTH_MODE
-      - MAESTRO_X402_ALLOW_SHELL_SIGNER
+      - MAESTRO_X402_SIGNER_PASSTHROUGH_VARS
       - MAESTRO_X402_DEBUG
-      - MAESTRO_SHOW_PAYMENT_RESPONSE
 ---
 
 # Maestro Bitcoin Skill
@@ -56,10 +65,9 @@ Implementation guidance for agents:
 ## Security Controls (Read Before Running)
 
 - `MAESTRO_API_KEY`, `MAESTRO_X402_SIGNER`, and `MAESTRO_X402_PAYMENT_SIGNATURE` are sensitive inputs and must be treated as secrets.
-- `MAESTRO_X402_SIGNER` executes local code. By default, `call_maestro.sh` requires this to be an executable file path.
-- `MAESTRO_X402_ALLOW_SHELL_SIGNER=1` enables shell-command signer execution and increases risk. Use only when explicitly needed.
+- `MAESTRO_X402_SIGNER` executes local code and must point to a trusted executable you control.
+- The signer runs in a constrained environment by default (minimal env); only explicitly passed variables are exposed.
 - `MAESTRO_X402_DEBUG=1` prints only fingerprints (not decoded payloads), but can still expose operational metadata.
-- `MAESTRO_SHOW_PAYMENT_RESPONSE=1` prints raw `PAYMENT-RESPONSE` to stderr and should be avoided in production logs.
 - For autonomous/looped usage, prefer `MAESTRO_AUTH_MODE=api-key` unless paid x402 calls are explicitly required.
 - Only trust signer programs you control and review; a malicious signer can exfiltrate payment challenge metadata and request context.
 
@@ -110,13 +118,6 @@ Use when running in `api-key` mode, or when `auto` mode should prefer API key au
 export MAESTRO_API_KEY="your_api_key_here"
 ```
 
-Add to `~/.bashrc` or `~/.zshrc` for persistence:
-
-```bash
-echo 'export MAESTRO_API_KEY="your_api_key_here"' >> ~/.bashrc
-source ~/.bashrc
-```
-
 ### X402 Signer Setup (Wallet Agents)
 
 In x402 mode, provide a signer command that prints `PAYMENT-SIGNATURE` to stdout when challenged:
@@ -139,9 +140,8 @@ Signer receives challenge/request metadata in environment variables:
 Optional x402 environment variables:
 - `MAESTRO_X402_MAX_RETRIES` (default: `1`)
 - `MAESTRO_X402_SIGNER_TIMEOUT` (default: `30`, set `0` to disable timeout)
-- `MAESTRO_X402_ALLOW_SHELL_SIGNER` (default: `0`; set `1` only for trusted shell signer commands)
+- `MAESTRO_X402_SIGNER_PASSTHROUGH_VARS` (comma-separated env vars intentionally exposed to signer)
 - `MAESTRO_X402_DEBUG` (`1` to print challenge/receipt fingerprints)
-- `MAESTRO_SHOW_PAYMENT_RESPONSE` (`1` to print `PAYMENT-RESPONSE`)
 - `MAESTRO_X402_PAYMENT_SIGNATURE` (manual static override)
 
 ### Getting an API Key

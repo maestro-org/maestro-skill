@@ -21,10 +21,10 @@ For x402, the script handles:
 ## Security Model
 
 - `MAESTRO_API_KEY`, `MAESTRO_X402_SIGNER`, and `MAESTRO_X402_PAYMENT_SIGNATURE` must be treated as secrets.
-- By default, `MAESTRO_X402_SIGNER` must be an executable file path (safer than arbitrary shell command execution).
-- `MAESTRO_X402_ALLOW_SHELL_SIGNER=1` enables shell signer commands and should only be used for trusted local tooling.
+- `MAESTRO_X402_SIGNER` must be an executable file path.
+- The signer runs in a constrained environment by default.
+- Use `MAESTRO_X402_SIGNER_PASSTHROUGH_VARS` only for env vars the signer truly needs.
 - `MAESTRO_X402_DEBUG=1` emits only fingerprints for payment challenge/receipt values (not decoded payloads).
-- `MAESTRO_SHOW_PAYMENT_RESPONSE=1` prints raw payment receipt headers and should be disabled in production logging.
 - In autonomous workloads, prefer `MAESTRO_AUTH_MODE=api-key` unless explicit paid x402 calls are intended.
 
 ## Quick Start (x402)
@@ -41,12 +41,11 @@ export MAESTRO_X402_SIGNER="/path/to/your/signer-command"
 
 # Optional signer controls
 export MAESTRO_X402_SIGNER_TIMEOUT="30"
-# Keep this at 0 unless you intentionally need shell command signer execution
-export MAESTRO_X402_ALLOW_SHELL_SIGNER="0"
+# Optional: pass only explicitly needed env vars into signer (comma-separated)
+export MAESTRO_X402_SIGNER_PASSTHROUGH_VARS="WALLET_PROVIDER_URL"
 
-# Optional debugging
-export MAESTRO_X402_DEBUG="1"
-export MAESTRO_SHOW_PAYMENT_RESPONSE="1"
+# Optional debugging (fingerprints only; avoid in production logs)
+export MAESTRO_X402_DEBUG="0"
 
 ./scripts/call_maestro.sh get-latest-height
 ```

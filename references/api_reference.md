@@ -42,7 +42,7 @@ Get your API key from [Maestro Dashboard](https://dashboard.gomaestro.org/signup
 
 Most endpoint examples in this file use `api-key` for brevity.
 
-Security note for scripted x402 usage: treat signer configuration as privileged. A signer has access to payment challenge metadata and should be trusted and locally controlled. In `scripts/call_maestro.sh`, signer execution defaults to executable-file mode; shell command execution requires `MAESTRO_X402_ALLOW_SHELL_SIGNER=1`.
+Security note for scripted x402 usage: treat signer configuration as privileged. A signer has access to payment challenge metadata and should be trusted and locally controlled. In `scripts/call_maestro.sh`, signer execution is restricted to executable-file mode with a constrained environment.
 
 ---
 

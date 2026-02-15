@@ -13,9 +13,8 @@ AUTH_MODE="${MAESTRO_AUTH_MODE:-auto}"          # auto | api-key | x402
 X402_SIGNER="${MAESTRO_X402_SIGNER:-}"
 X402_MAX_RETRIES="${MAESTRO_X402_MAX_RETRIES:-1}"
 X402_DEBUG="${MAESTRO_X402_DEBUG:-0}"
-SHOW_PAYMENT_RESPONSE="${MAESTRO_SHOW_PAYMENT_RESPONSE:-0}"
 X402_SIGNER_TIMEOUT="${MAESTRO_X402_SIGNER_TIMEOUT:-30}"
-X402_ALLOW_SHELL_SIGNER="${MAESTRO_X402_ALLOW_SHELL_SIGNER:-0}"
+X402_SIGNER_PASSTHROUGH_VARS="${MAESTRO_X402_SIGNER_PASSTHROUGH_VARS:-}"
 
 RESPONSE_HEADERS_FILE=""
 RESPONSE_BODY_FILE=""
@@ -42,15 +41,6 @@ case "$X402_DEBUG" in
     ;;
   *)
     echo "Error: MAESTRO_X402_DEBUG must be 0 or 1." >&2
-    exit 1
-    ;;
-esac
-
-case "$X402_ALLOW_SHELL_SIGNER" in
-  0|1)
-    ;;
-  *)
-    echo "Error: MAESTRO_X402_ALLOW_SHELL_SIGNER must be 0 or 1." >&2
     exit 1
     ;;
 esac
@@ -119,37 +109,62 @@ get_response_header() {
 run_signer_command() {
   local output
   local status
-
-  if [ "$X402_ALLOW_SHELL_SIGNER" = "1" ]; then
-    if [ "$X402_SIGNER_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-      if output="$(timeout "$X402_SIGNER_TIMEOUT" bash -lc "$X402_SIGNER")"; then
-        printf "%s" "$output"
-        return 0
-      fi
-    else
-      if output="$(bash -lc "$X402_SIGNER")"; then
-        printf "%s" "$output"
-        return 0
-      fi
-    fi
-    status=$?
-    echo "Error: MAESTRO_X402_SIGNER command failed (exit $status)." >&2
-    return "$status"
-  fi
+  local var_name
+  local var_value
+  local -a passthrough_vars
+  local -a signer_cmd
+  local -a signer_env
+  local candidate
 
   if [ ! -f "$X402_SIGNER" ] || [ ! -x "$X402_SIGNER" ]; then
     echo "Error: MAESTRO_X402_SIGNER must be an executable file path." >&2
-    echo "Set MAESTRO_X402_ALLOW_SHELL_SIGNER=1 only if you intentionally need shell command execution." >&2
     return 1
   fi
 
+  signer_env=(
+    "PATH=${PATH:-/usr/bin:/bin}"
+    "HOME=${HOME:-}"
+    "LANG=${LANG:-C}"
+    "LC_ALL=${LC_ALL:-}"
+    "MAESTRO_X402_PAYMENT_REQUIRED=${MAESTRO_X402_PAYMENT_REQUIRED:-}"
+    "MAESTRO_X402_HTTP_METHOD=${MAESTRO_X402_HTTP_METHOD:-}"
+    "MAESTRO_X402_ENDPOINT=${MAESTRO_X402_ENDPOINT:-}"
+    "MAESTRO_X402_URL=${MAESTRO_X402_URL:-}"
+    "MAESTRO_X402_REQUEST_BODY=${MAESTRO_X402_REQUEST_BODY:-}"
+    "MAESTRO_X402_CONTENT_TYPE=${MAESTRO_X402_CONTENT_TYPE:-}"
+    "MAESTRO_X402_NETWORK=${MAESTRO_X402_NETWORK:-}"
+    "MAESTRO_X402_ATTEMPT=${MAESTRO_X402_ATTEMPT:-}"
+  )
+
+  if [ -n "$X402_SIGNER_PASSTHROUGH_VARS" ]; then
+    IFS=',' read -r -a passthrough_vars <<< "$X402_SIGNER_PASSTHROUGH_VARS"
+    for candidate in "${passthrough_vars[@]}"; do
+      var_name="$(trim_line "$candidate")"
+      if [ -z "$var_name" ]; then
+        continue
+      fi
+      if ! [[ "$var_name" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        echo "Error: invalid env var name in MAESTRO_X402_SIGNER_PASSTHROUGH_VARS: $var_name" >&2
+        return 1
+      fi
+      var_value="${!var_name-}"
+      if [ -n "${var_value+x}" ] && [ -n "$var_value" ]; then
+        signer_env+=("${var_name}=${var_value}")
+      fi
+    done
+  fi
+
+  signer_cmd=(env -i)
+  signer_cmd+=("${signer_env[@]}")
+  signer_cmd+=("$X402_SIGNER")
+
   if [ "$X402_SIGNER_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
-    if output="$(timeout "$X402_SIGNER_TIMEOUT" "$X402_SIGNER")"; then
+    if output="$(timeout "$X402_SIGNER_TIMEOUT" "${signer_cmd[@]}")"; then
       printf "%s" "$output"
       return 0
     fi
   else
-    if output="$("$X402_SIGNER")"; then
+    if output="$("${signer_cmd[@]}")"; then
       printf "%s" "$output"
       return 0
     fi
@@ -216,7 +231,7 @@ resolve_x402_payment_signature() {
 
   if [ -z "$X402_SIGNER" ]; then
     echo "Error: x402 payment required but no signer configured." >&2
-    echo "Set MAESTRO_X402_SIGNER to a command that prints PAYMENT-SIGNATURE." >&2
+    echo "Set MAESTRO_X402_SIGNER to an executable signer path that prints PAYMENT-SIGNATURE." >&2
     echo "The signer receives MAESTRO_X402_PAYMENT_REQUIRED and request metadata in env vars." >&2
     return 1
   fi
@@ -323,15 +338,12 @@ perform_request() {
 
   cat "$RESPONSE_BODY_FILE"
 
-  if [ "$SHOW_PAYMENT_RESPONSE" = "1" ]; then
+  if [ "$X402_DEBUG" = "1" ]; then
     local payment_response
     payment_response="$(get_response_header "$RESPONSE_HEADERS_FILE" "PAYMENT-RESPONSE")"
     if [ -n "$payment_response" ]; then
       echo >&2
-      echo "PAYMENT-RESPONSE: $payment_response" >&2
-      if [ "$X402_DEBUG" = "1" ]; then
-        echo "PAYMENT-RESPONSE fingerprint: $(fingerprint_value "$payment_response")" >&2
-      fi
+      echo "PAYMENT-RESPONSE fingerprint: $(fingerprint_value "$payment_response")" >&2
     fi
   fi
 
@@ -967,13 +979,12 @@ CONFIGURATION:
   MAESTRO_NETWORK               - Network: mainnet or testnet (default: mainnet)
   MAESTRO_AUTH_MODE             - Auth mode: auto, api-key, x402 (default: auto)
   MAESTRO_API_KEY               - Used in auto/api-key modes
-  MAESTRO_X402_SIGNER           - Command that prints PAYMENT-SIGNATURE for a challenge
+  MAESTRO_X402_SIGNER           - Executable signer path that prints PAYMENT-SIGNATURE
   MAESTRO_X402_PAYMENT_SIGNATURE - Static PAYMENT-SIGNATURE override (optional)
   MAESTRO_X402_MAX_RETRIES      - x402 challenge retries (default: 1)
   MAESTRO_X402_SIGNER_TIMEOUT   - Max signer runtime in seconds (default: 30, 0 disables timeout)
-  MAESTRO_X402_ALLOW_SHELL_SIGNER - 0: signer must be executable path, 1: allow shell command execution
+  MAESTRO_X402_SIGNER_PASSTHROUGH_VARS - Comma-separated env vars to expose to signer
   MAESTRO_X402_DEBUG            - Set to 1 to print redacted challenge/receipt fingerprints
-  MAESTRO_SHOW_PAYMENT_RESPONSE - Set to 1 to print PAYMENT-RESPONSE header on success
 
 EXAMPLES:
   # Get latest block height
