@@ -27,13 +27,21 @@ Maestro provides a comprehensive Bitcoin API platform with 7 distinct services a
 
 ## Authentication
 
-### Method
-API Key in HTTP Header
+### Supported Methods
+1. API Key in HTTP header
+2. x402 v2 payment flow (USDC on Ethereum or Base)
 
-### Header Format
+### API Key Header Format
 ```
 api-key: <your_project_api_key>
 ```
+
+### x402 Header Flow
+1. Initial request without `api-key`
+2. `402 Payment Required` with `PAYMENT-REQUIRED`
+3. Client signs payment using wallet
+4. Retry with `PAYMENT-SIGNATURE`
+5. Success response may include `PAYMENT-RESPONSE`
 
 ### Getting Your API Key
 1. Sign up at https://dashboard.gomaestro.org/signup
@@ -45,7 +53,8 @@ api-key: <your_project_api_key>
 ### Important Notes
 - Each API key is specific to a project and network
 - Keep your API key private and never share it publicly
-- API keys must be included in all requests
+- API keys are optional if x402 payment flow is used
+- Most raw `curl` examples below use API key auth for brevity
 
 ---
 
@@ -811,8 +820,7 @@ curl -H "api-key: YOUR_API_KEY" \
 - **Total Services:** 7
 - **Total Endpoints:** 119
 - **Networks Supported:** Mainnet, Testnet4
-- **Authentication:** API Key (Header-based)
+- **Authentication:** API Key header or x402 payment flow
 - **Pagination:** Cursor-based
 - **Rate Limiting:** Two-tier (Daily + Per-second)
 - **Metaprotocol Support:** BRC20, Runes, Inscriptions (Ordinals)
-

@@ -4,11 +4,20 @@
 # Supports all 7 API services with 119 endpoints
 # Usage: ./call_maestro.sh <command> [args...]
 
-set -e
+set -euo pipefail
 
 # Configuration
-API_KEY="${MAESTRO_API_KEY}"
+API_KEY="${MAESTRO_API_KEY:-}"
 NETWORK="${MAESTRO_NETWORK:-mainnet}"
+AUTH_MODE="${MAESTRO_AUTH_MODE:-auto}"          # auto | api-key | x402
+X402_SIGNER="${MAESTRO_X402_SIGNER:-}"
+X402_MAX_RETRIES="${MAESTRO_X402_MAX_RETRIES:-1}"
+X402_DEBUG="${MAESTRO_X402_DEBUG:-0}"
+SHOW_PAYMENT_RESPONSE="${MAESTRO_SHOW_PAYMENT_RESPONSE:-0}"
+
+RESPONSE_HEADERS_FILE=""
+RESPONSE_BODY_FILE=""
+HTTP_STATUS=""
 
 if [ "$NETWORK" = "testnet" ]; then
   BASE_URL="https://xbt-testnet.gomaestro-api.org/v0"
@@ -16,15 +25,259 @@ else
   BASE_URL="https://xbt-mainnet.gomaestro-api.org/v0"
 fi
 
-if [ -z "$API_KEY" ]; then
-  echo "Error: MAESTRO_API_KEY environment variable is not set."
+if ! [[ "$X402_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+  echo "Error: MAESTRO_X402_MAX_RETRIES must be a non-negative integer." >&2
   exit 1
 fi
+
+case "$AUTH_MODE" in
+  auto|api-key|x402)
+    ;;
+  *)
+    echo "Error: MAESTRO_AUTH_MODE must be one of: auto, api-key, x402." >&2
+    exit 1
+    ;;
+esac
+
+trim_line() {
+  local value="$1"
+  value="${value//$'\r'/}"
+  printf "%s" "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
+}
+
+decode_base64() {
+  local encoded="$1"
+  if printf "%s" "$encoded" | base64 --decode >/dev/null 2>&1; then
+    printf "%s" "$encoded" | base64 --decode
+    return 0
+  fi
+  if printf "%s" "$encoded" | base64 -d >/dev/null 2>&1; then
+    printf "%s" "$encoded" | base64 -d
+    return 0
+  fi
+  return 1
+}
+
+cleanup_response_files() {
+  [ -n "${RESPONSE_HEADERS_FILE:-}" ] && [ -f "$RESPONSE_HEADERS_FILE" ] && rm -f "$RESPONSE_HEADERS_FILE"
+  [ -n "${RESPONSE_BODY_FILE:-}" ] && [ -f "$RESPONSE_BODY_FILE" ] && rm -f "$RESPONSE_BODY_FILE"
+  RESPONSE_HEADERS_FILE=""
+  RESPONSE_BODY_FILE=""
+}
+
+trap cleanup_response_files EXIT
+
+get_response_header() {
+  local header_file="$1"
+  local header_name
+  header_name="$(echo "$2" | tr '[:upper:]' '[:lower:]')"
+  awk -v target="${header_name}:" '
+    {
+      line=$0
+      sub(/\r$/, "", line)
+      low=tolower(line)
+      if (index(low, target) == 1) {
+        value=substr(line, length(target) + 1)
+        sub(/^[[:space:]]+/, "", value)
+        last=value
+      }
+    }
+    END {
+      if (last != "") print last
+    }
+  ' "$header_file"
+}
+
+run_http_request() {
+  local method="$1"
+  local endpoint="$2"
+  local data="$3"
+  local content_type="$4"
+  local include_api_key="$5"
+  local payment_signature="$6"
+  local curl_output
+
+  cleanup_response_files
+  RESPONSE_HEADERS_FILE="$(mktemp)"
+  RESPONSE_BODY_FILE="$(mktemp)"
+
+  local -a curl_args
+  curl_args=(-sS -X "$method" -D "$RESPONSE_HEADERS_FILE" -o "$RESPONSE_BODY_FILE" -w "%{http_code}")
+
+  if [ "$include_api_key" = "1" ]; then
+    curl_args+=(-H "api-key: $API_KEY")
+  fi
+  if [ -n "$payment_signature" ]; then
+    curl_args+=(-H "PAYMENT-SIGNATURE: $payment_signature")
+  fi
+  if [ -n "$content_type" ]; then
+    curl_args+=(-H "Content-Type: $content_type")
+  fi
+  if [ -n "$data" ]; then
+    curl_args+=(-d "$data")
+  fi
+
+  curl_args+=("${BASE_URL}${endpoint}")
+
+  if curl_output="$(curl "${curl_args[@]}")"; then
+    HTTP_STATUS="$curl_output"
+  else
+    local curl_status=$?
+    echo "Error: request failed (curl exit code ${curl_status})." >&2
+    return "$curl_status"
+  fi
+}
+
+resolve_x402_payment_signature() {
+  local payment_required="$1"
+  local method="$2"
+  local endpoint="$3"
+  local request_body="$4"
+  local content_type="$5"
+  local attempt="$6"
+  local signature
+
+  if [ -n "${MAESTRO_X402_PAYMENT_SIGNATURE:-}" ]; then
+    trim_line "${MAESTRO_X402_PAYMENT_SIGNATURE}"
+    return 0
+  fi
+
+  if [ -z "$X402_SIGNER" ]; then
+    echo "Error: x402 payment required but no signer configured." >&2
+    echo "Set MAESTRO_X402_SIGNER to a command that prints PAYMENT-SIGNATURE." >&2
+    echo "The signer receives MAESTRO_X402_PAYMENT_REQUIRED and request metadata in env vars." >&2
+    return 1
+  fi
+
+  if ! signature="$(
+    MAESTRO_X402_PAYMENT_REQUIRED="$payment_required" \
+    MAESTRO_X402_HTTP_METHOD="$method" \
+    MAESTRO_X402_ENDPOINT="$endpoint" \
+    MAESTRO_X402_URL="${BASE_URL}${endpoint}" \
+    MAESTRO_X402_REQUEST_BODY="$request_body" \
+    MAESTRO_X402_CONTENT_TYPE="$content_type" \
+    MAESTRO_X402_NETWORK="$NETWORK" \
+    MAESTRO_X402_ATTEMPT="$attempt" \
+    bash -lc "$X402_SIGNER"
+  )"; then
+    echo "Error: MAESTRO_X402_SIGNER command failed." >&2
+    return 1
+  fi
+
+  signature="$(trim_line "$signature")"
+  signature="$(echo "$signature" | sed -E 's/^[Pp][Aa][Yy][Mm][Ee][Nn][Tt]-[Ss][Ii][Gg][Nn][Aa][Tt][Uu][Rr][Ee]:[[:space:]]*//')"
+  signature="$(trim_line "$signature")"
+
+  if [ -z "$signature" ]; then
+    echo "Error: x402 signer command returned an empty PAYMENT-SIGNATURE." >&2
+    return 1
+  fi
+
+  echo "$signature"
+}
+
+request_with_x402() {
+  local method="$1"
+  local endpoint="$2"
+  local data="$3"
+  local content_type="$4"
+  local retries=0
+  local payment_required
+  local payment_signature=""
+
+  while true; do
+    run_http_request "$method" "$endpoint" "$data" "$content_type" "0" "$payment_signature"
+
+    if [ "$HTTP_STATUS" != "402" ]; then
+      return 0
+    fi
+
+    payment_required="$(get_response_header "$RESPONSE_HEADERS_FILE" "PAYMENT-REQUIRED")"
+    if [ -z "$payment_required" ]; then
+      echo "Error: received HTTP 402 without PAYMENT-REQUIRED header." >&2
+      return 1
+    fi
+
+    if [ "$X402_DEBUG" = "1" ]; then
+      echo "x402 challenge (base64): $payment_required" >&2
+      if decode_base64 "$payment_required" >/dev/null 2>&1; then
+        echo "x402 challenge (decoded JSON):" >&2
+        decode_base64 "$payment_required" >&2 || true
+      fi
+    fi
+
+    if [ "$retries" -ge "$X402_MAX_RETRIES" ]; then
+      echo "Error: payment still required after ${retries} x402 retries." >&2
+      return 1
+    fi
+
+    payment_signature="$(resolve_x402_payment_signature "$payment_required" "$method" "$endpoint" "$data" "$content_type" "$((retries + 1))")"
+    retries=$((retries + 1))
+  done
+}
+
+request_with_api_key() {
+  local method="$1"
+  local endpoint="$2"
+  local data="$3"
+  local content_type="$4"
+
+  if [ -z "$API_KEY" ]; then
+    echo "Error: MAESTRO_API_KEY is required for MAESTRO_AUTH_MODE=api-key." >&2
+    return 1
+  fi
+
+  run_http_request "$method" "$endpoint" "$data" "$content_type" "1" ""
+}
+
+perform_request() {
+  local method="$1"
+  local endpoint="$2"
+  local data="$3"
+  local content_type="$4"
+
+  case "$AUTH_MODE" in
+    api-key)
+      request_with_api_key "$method" "$endpoint" "$data" "$content_type"
+      ;;
+    x402)
+      request_with_x402 "$method" "$endpoint" "$data" "$content_type"
+      ;;
+    auto)
+      if [ -n "$API_KEY" ]; then
+        request_with_api_key "$method" "$endpoint" "$data" "$content_type"
+      else
+        request_with_x402 "$method" "$endpoint" "$data" "$content_type"
+      fi
+      ;;
+  esac
+
+  cat "$RESPONSE_BODY_FILE"
+
+  if [ "$SHOW_PAYMENT_RESPONSE" = "1" ]; then
+    local payment_response
+    payment_response="$(get_response_header "$RESPONSE_HEADERS_FILE" "PAYMENT-RESPONSE")"
+    if [ -n "$payment_response" ]; then
+      echo >&2
+      echo "PAYMENT-RESPONSE: $payment_response" >&2
+      if [ "$X402_DEBUG" = "1" ] && decode_base64 "$payment_response" >/dev/null 2>&1; then
+        echo "PAYMENT-RESPONSE (decoded JSON):" >&2
+        decode_base64 "$payment_response" >&2 || true
+      fi
+    fi
+  fi
+
+  if [[ "$HTTP_STATUS" =~ ^[0-9]+$ ]] && [ "$HTTP_STATUS" -ge 400 ]; then
+    echo >&2
+    echo "Request failed with HTTP status $HTTP_STATUS." >&2
+    return 1
+  fi
+}
 
 # Helper function for GET requests
 maestro_get() {
   local endpoint="$1"
-  curl -s -H "api-key: $API_KEY" "${BASE_URL}${endpoint}"
+  perform_request "GET" "$endpoint" "" ""
 }
 
 # Helper function for POST requests
@@ -32,34 +285,26 @@ maestro_post() {
   local endpoint="$1"
   local data="$2"
   local content_type="${3:-application/json}"
-  curl -s -X POST \
-    -H "api-key: $API_KEY" \
-    -H "Content-Type: $content_type" \
-    -d "$data" \
-    "${BASE_URL}${endpoint}"
+  perform_request "POST" "$endpoint" "$data" "$content_type"
 }
 
 # Helper function for PUT requests
 maestro_put() {
   local endpoint="$1"
   local data="$2"
-  curl -s -X PUT \
-    -H "api-key: $API_KEY" \
-    -H "Content-Type: application/json" \
-    -d "$data" \
-    "${BASE_URL}${endpoint}"
+  perform_request "PUT" "$endpoint" "$data" "application/json"
 }
 
 # Helper function for DELETE requests
 maestro_delete() {
   local endpoint="$1"
-  curl -s -X DELETE \
-    -H "api-key: $API_KEY" \
-    "${BASE_URL}${endpoint}"
+  perform_request "DELETE" "$endpoint" "" ""
 }
 
-command=$1
-shift
+command="${1:-}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
 
 case "$command" in
 
@@ -475,6 +720,7 @@ case "$command" in
 Maestro Bitcoin API Wrapper - Comprehensive Access to 119 Endpoints
 
 Network: $NETWORK ($BASE_URL)
+Auth Mode: $AUTH_MODE
 
 USAGE:
   ./call_maestro.sh <command> [args...]
@@ -650,12 +896,24 @@ WALLET API (6 endpoints):
     wallet-get-stats <address>               - Get address statistics
 
 CONFIGURATION:
-  MAESTRO_API_KEY      - Your Maestro API key (required)
-  MAESTRO_NETWORK      - Network: mainnet or testnet (default: mainnet)
+  MAESTRO_NETWORK               - Network: mainnet or testnet (default: mainnet)
+  MAESTRO_AUTH_MODE             - Auth mode: auto, api-key, x402 (default: auto)
+  MAESTRO_API_KEY               - Used in auto/api-key modes
+  MAESTRO_X402_SIGNER           - Command that prints PAYMENT-SIGNATURE for a challenge
+  MAESTRO_X402_PAYMENT_SIGNATURE - Static PAYMENT-SIGNATURE override (optional)
+  MAESTRO_X402_MAX_RETRIES      - x402 challenge retries (default: 1)
+  MAESTRO_X402_DEBUG            - Set to 1 to print decoded x402 challenge metadata
+  MAESTRO_SHOW_PAYMENT_RESPONSE - Set to 1 to print PAYMENT-RESPONSE header on success
 
 EXAMPLES:
   # Get latest block height
   ./call_maestro.sh get-latest-height
+
+  # Force x402 mode (no api-key), signer command supplied by agent runtime
+  MAESTRO_AUTH_MODE=x402 MAESTRO_X402_SIGNER="./my_wallet_signer" ./call_maestro.sh get-latest-height
+
+  # Auto mode: uses api-key if set, otherwise x402
+  MAESTRO_AUTH_MODE=auto ./call_maestro.sh get-balance bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
 
   # Get address balance
   ./call_maestro.sh get-balance bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh
