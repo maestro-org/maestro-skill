@@ -19,13 +19,28 @@ Complete reference for all Maestro Bitcoin API endpoints across 7 services with 
 
 ## Authentication
 
-All requests require the `api-key` header:
+Maestro APIs support two auth paths:
+
+1. `api-key` header authentication
+2. `x402 v2` payment authentication (USDC on Ethereum/Base)
+
+### API Key Header
 
 ```bash
 api-key: YOUR_PROJECT_API_KEY
 ```
 
 Get your API key from [Maestro Dashboard](https://dashboard.gomaestro.org/signup).
+
+### x402 v2 Flow
+
+1. Send request without `api-key`.
+2. Receive `402 Payment Required` with `PAYMENT-REQUIRED` header.
+3. Sign payment payload with wallet.
+4. Retry with `PAYMENT-SIGNATURE` header.
+5. On success, server returns `2xx` and may include `PAYMENT-RESPONSE`.
+
+Most endpoint examples in this file use `api-key` for brevity.
 
 ---
 
@@ -84,6 +99,7 @@ Cursor-based pagination for efficient data retrieval:
 ### Status Codes
 
 - `200` - Success
+- `402` - Payment Required (x402 challenge)
 - `400` - Bad Request (malformed parameters)
 - `404` - Not Found (entity not found on-chain)
 - `429` - Too Many Requests (rate limit exceeded)
@@ -1348,7 +1364,7 @@ Address statistics (mempool-aware).
 - **Total Services:** 7
 - **Total Endpoints:** 119
 - **Networks:** Mainnet, Testnet4
-- **Authentication:** API Key (Header-based)
+- **Authentication:** API Key header or x402 payment flow
 - **Pagination:** Cursor-based
 - **Rate Limiting:** Two-tier (Daily + Per-second)
 - **Metaprotocol Support:** BRC20, Runes, Inscriptions (Ordinals)

@@ -7,6 +7,33 @@ description: Comprehensive Bitcoin blockchain interaction via Maestro APIs. Supp
 
 A comprehensive skill for interacting with the Bitcoin blockchain through the Maestro API platform, providing access to 7 distinct API services with 119 total endpoints.
 
+## X402 Payments (All Maestro APIs)
+
+All Maestro APIs support **x402 v2** payments. If `api-key` is not provided, the gateway returns a payment challenge and the client can pay in **USDC on Ethereum or Base**.
+
+Use this flow for agents and tools:
+
+1. Send the API request without `api-key`.
+2. If payment is required, expect `HTTP 402 Payment Required` with `PAYMENT-REQUIRED` header.
+3. Base64-decode `PAYMENT-REQUIRED` and parse JSON requirements.
+4. Select an `accepts[]` option where the asset is USDC and network is supported (`Ethereum` or `Base`).
+5. Build and sign the x402 payment payload with the caller's wallet.
+6. Retry the same API request with `PAYMENT-SIGNATURE` header (Base64-encoded signed payload).
+7. On success, expect a normal `2xx` API response and a `PAYMENT-RESPONSE` header (payment/settlement receipt).
+
+Key x402 v2 headers:
+- `PAYMENT-REQUIRED`: gateway challenge with payment requirements
+- `PAYMENT-SIGNATURE`: client-signed payment proof on retry
+- `PAYMENT-RESPONSE`: settlement/receipt metadata on successful paid response
+
+Implementation guidance for agents:
+- Prefer `api-key` when available for repeated or high-volume calls.
+- Use x402 fallback when `api-key` is missing or intentionally omitted.
+- Treat each `402` as the source of truth for `amount`, `asset`, `network`, and `payTo`.
+- Do not hardcode payment amounts or recipient addresses.
+- If multiple USDC options are offered, the agent may choose any supported network (Ethereum or Base) based on context, with no fixed default.
+- If payment verification fails, re-request and use the latest `PAYMENT-REQUIRED` challenge.
+
 ## Overview
 
 This skill provides complete access to Maestro's Bitcoin API suite:
@@ -33,9 +60,22 @@ This skill provides complete access to Maestro's Bitcoin API suite:
 
 ## Configuration
 
-### API Key Setup
+### Authentication Mode
 
-This skill requires a Maestro API Key. Set the `MAESTRO_API_KEY` environment variable:
+`scripts/call_maestro.sh` supports three auth modes:
+
+- `MAESTRO_AUTH_MODE=auto` (default): use `MAESTRO_API_KEY` if present, otherwise use x402
+- `MAESTRO_AUTH_MODE=api-key`: force API key auth
+- `MAESTRO_AUTH_MODE=x402`: force x402 payment flow
+
+```bash
+# Auto mode (recommended default for agents)
+export MAESTRO_AUTH_MODE="auto"
+```
+
+### API Key Setup (Optional)
+
+Use when running in `api-key` mode, or when `auto` mode should prefer API key auth:
 
 ```bash
 export MAESTRO_API_KEY="your_api_key_here"
@@ -47,6 +87,31 @@ Add to `~/.bashrc` or `~/.zshrc` for persistence:
 echo 'export MAESTRO_API_KEY="your_api_key_here"' >> ~/.bashrc
 source ~/.bashrc
 ```
+
+### X402 Signer Setup (Wallet Agents)
+
+In x402 mode, provide a signer command that prints `PAYMENT-SIGNATURE` to stdout when challenged:
+
+```bash
+export MAESTRO_AUTH_MODE="x402"
+export MAESTRO_X402_SIGNER="/path/to/your/signer-command"
+```
+
+Signer receives challenge/request metadata in environment variables:
+- `MAESTRO_X402_PAYMENT_REQUIRED`
+- `MAESTRO_X402_HTTP_METHOD`
+- `MAESTRO_X402_ENDPOINT`
+- `MAESTRO_X402_URL`
+- `MAESTRO_X402_REQUEST_BODY`
+- `MAESTRO_X402_CONTENT_TYPE`
+- `MAESTRO_X402_NETWORK`
+- `MAESTRO_X402_ATTEMPT`
+
+Optional x402 environment variables:
+- `MAESTRO_X402_MAX_RETRIES` (default: `1`)
+- `MAESTRO_X402_DEBUG` (`1` to print decoded challenge/receipt metadata)
+- `MAESTRO_SHOW_PAYMENT_RESPONSE` (`1` to print `PAYMENT-RESPONSE`)
+- `MAESTRO_X402_PAYMENT_SIGNATURE` (manual static override)
 
 ### Getting an API Key
 
@@ -77,6 +142,9 @@ The main interface is through `scripts/call_maestro.sh`, which provides access t
 #### Quick Examples
 
 ```bash
+# x402 mode with signer command
+MAESTRO_AUTH_MODE=x402 MAESTRO_X402_SIGNER="/path/to/signer" ./scripts/call_maestro.sh get-latest-height
+
 # Get latest block height
 ./scripts/call_maestro.sh get-latest-height
 
@@ -264,7 +332,7 @@ Check rate limit headers in responses:
 
 ## Notes
 
-- All endpoints require valid API key authentication
+- All endpoints require either a valid `api-key` header or a successful x402 payment
 - The `/v0` version prefix must be included in all API calls
 - Cursor-based pagination is available for listing endpoints
 - Block height filtering available via `from` and `to` parameters

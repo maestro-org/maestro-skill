@@ -4,16 +4,34 @@ Comprehensive examples for common use cases across all 7 API services.
 
 ## Table of Contents
 
-1. [Address Operations](#address-operations)
-2. [Block Operations](#block-operations)
-3. [Transaction Operations](#transaction-operations)
-4. [Metaprotocol Queries](#metaprotocol-queries)
-5. [Mempool Operations](#mempool-operations)
-6. [Market Data](#market-data)
-7. [Event Management](#event-management)
-8. [Wallet Tracking](#wallet-tracking)
+1. [Auth Setup](#auth-setup)
+2. [Address Operations](#address-operations)
+3. [Block Operations](#block-operations)
+4. [Transaction Operations](#transaction-operations)
+5. [Metaprotocol Queries](#metaprotocol-queries)
+6. [Mempool Operations](#mempool-operations)
+7. [Market Data](#market-data)
+8. [Event Management](#event-management)
+9. [Wallet Tracking](#wallet-tracking)
 
 ---
+
+## Auth Setup
+
+```bash
+# Default behavior: auto mode
+# - uses MAESTRO_API_KEY if present
+# - otherwise runs x402 flow
+export MAESTRO_AUTH_MODE="auto"
+
+# Optional: force API key mode
+export MAESTRO_API_KEY="your_api_key_here"
+export MAESTRO_AUTH_MODE="api-key"
+
+# Optional: force x402 mode (wallet signer required)
+export MAESTRO_AUTH_MODE="x402"
+export MAESTRO_X402_SIGNER="/path/to/your/signer-command"
+```
 
 ## Address Operations
 
@@ -622,18 +640,24 @@ TX_HASH="4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
 ### Error Handling
 
 ```bash
-# Check if API key is set
-if [ -z "$MAESTRO_API_KEY" ]; then
-  echo "Error: MAESTRO_API_KEY not set"
+# Validate auth mode configuration
+if [ "${MAESTRO_AUTH_MODE:-auto}" = "api-key" ] && [ -z "${MAESTRO_API_KEY:-}" ]; then
+  echo "Error: MAESTRO_AUTH_MODE=api-key requires MAESTRO_API_KEY"
   exit 1
 fi
 
-# Check response status
-RESPONSE=$(./scripts/call_maestro.sh get-balance bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh)
-if echo "$RESPONSE" | grep -q "error"; then
-  echo "API Error: $RESPONSE"
+if [ "${MAESTRO_AUTH_MODE:-auto}" = "x402" ] && [ -z "${MAESTRO_X402_SIGNER:-}" ] && [ -z "${MAESTRO_X402_PAYMENT_SIGNATURE:-}" ]; then
+  echo "Error: MAESTRO_AUTH_MODE=x402 requires MAESTRO_X402_SIGNER or MAESTRO_X402_PAYMENT_SIGNATURE"
   exit 1
 fi
+
+# Use script exit status for error detection
+if ! RESPONSE=$(./scripts/call_maestro.sh get-balance bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh); then
+  echo "API Error: request failed"
+  exit 1
+fi
+
+echo "$RESPONSE"
 ```
 
 ---
