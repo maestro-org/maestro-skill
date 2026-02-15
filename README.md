@@ -2,6 +2,8 @@
 
 Minimal skill for agents that query Maestro Bitcoin APIs directly using x402.
 
+Published on ClawHub: https://clawhub.ai/Vardominator/maestro-skill
+
 ## What This Skill Is
 
 - Direct HTTP usage of Maestro endpoints.
