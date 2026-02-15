@@ -18,6 +18,15 @@ For x402, the script handles:
 3. Retry with `PAYMENT-SIGNATURE` from your signer command
 4. Final success response (`2xx`) and optional `PAYMENT-RESPONSE` output
 
+## Security Model
+
+- `MAESTRO_API_KEY`, `MAESTRO_X402_SIGNER`, and `MAESTRO_X402_PAYMENT_SIGNATURE` must be treated as secrets.
+- By default, `MAESTRO_X402_SIGNER` must be an executable file path (safer than arbitrary shell command execution).
+- `MAESTRO_X402_ALLOW_SHELL_SIGNER=1` enables shell signer commands and should only be used for trusted local tooling.
+- `MAESTRO_X402_DEBUG=1` emits only fingerprints for payment challenge/receipt values (not decoded payloads).
+- `MAESTRO_SHOW_PAYMENT_RESPONSE=1` prints raw payment receipt headers and should be disabled in production logging.
+- In autonomous workloads, prefer `MAESTRO_AUTH_MODE=api-key` unless explicit paid x402 calls are intended.
+
 ## Quick Start (x402)
 
 ```bash
@@ -29,6 +38,11 @@ export MAESTRO_AUTH_MODE="x402"
 
 # Command that signs the x402 challenge and prints PAYMENT-SIGNATURE
 export MAESTRO_X402_SIGNER="/path/to/your/signer-command"
+
+# Optional signer controls
+export MAESTRO_X402_SIGNER_TIMEOUT="30"
+# Keep this at 0 unless you intentionally need shell command signer execution
+export MAESTRO_X402_ALLOW_SHELL_SIGNER="0"
 
 # Optional debugging
 export MAESTRO_X402_DEBUG="1"
@@ -69,6 +83,7 @@ Environment variables passed to signer:
 Notes:
 - Returning either just the signature value or `PAYMENT-SIGNATURE: <value>` is supported.
 - For manual tests, you can set `MAESTRO_X402_PAYMENT_SIGNATURE` directly.
+- Signer stdout should contain only the signature line; any extra logs should go to stderr.
 
 ## Core Commands
 

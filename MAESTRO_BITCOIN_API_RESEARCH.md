@@ -55,6 +55,7 @@ api-key: <your_project_api_key>
 - Keep your API key private and never share it publicly
 - API keys are optional if x402 payment flow is used
 - Most raw `curl` examples below use API key auth for brevity
+- If using x402 via automation, signer commands should be trusted local executables only
 
 ---
 
