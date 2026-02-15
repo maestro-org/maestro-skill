@@ -31,6 +31,12 @@ export MAESTRO_AUTH_MODE="api-key"
 # Optional: force x402 mode (wallet signer required)
 export MAESTRO_AUTH_MODE="x402"
 export MAESTRO_X402_SIGNER="/path/to/your/signer-command"
+export MAESTRO_X402_SIGNER_TIMEOUT="30"
+export MAESTRO_X402_ALLOW_SHELL_SIGNER="0"
+
+# Optional diagnostics (avoid in production logs)
+export MAESTRO_X402_DEBUG="0"
+export MAESTRO_SHOW_PAYMENT_RESPONSE="0"
 ```
 
 ## Address Operations

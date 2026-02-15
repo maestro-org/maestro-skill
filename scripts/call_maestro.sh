@@ -14,6 +14,8 @@ X402_SIGNER="${MAESTRO_X402_SIGNER:-}"
 X402_MAX_RETRIES="${MAESTRO_X402_MAX_RETRIES:-1}"
 X402_DEBUG="${MAESTRO_X402_DEBUG:-0}"
 SHOW_PAYMENT_RESPONSE="${MAESTRO_SHOW_PAYMENT_RESPONSE:-0}"
+X402_SIGNER_TIMEOUT="${MAESTRO_X402_SIGNER_TIMEOUT:-30}"
+X402_ALLOW_SHELL_SIGNER="${MAESTRO_X402_ALLOW_SHELL_SIGNER:-0}"
 
 RESPONSE_HEADERS_FILE=""
 RESPONSE_BODY_FILE=""
@@ -30,6 +32,29 @@ if ! [[ "$X402_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+if ! [[ "$X402_SIGNER_TIMEOUT" =~ ^[0-9]+$ ]]; then
+  echo "Error: MAESTRO_X402_SIGNER_TIMEOUT must be a non-negative integer (seconds)." >&2
+  exit 1
+fi
+
+case "$X402_DEBUG" in
+  0|1)
+    ;;
+  *)
+    echo "Error: MAESTRO_X402_DEBUG must be 0 or 1." >&2
+    exit 1
+    ;;
+esac
+
+case "$X402_ALLOW_SHELL_SIGNER" in
+  0|1)
+    ;;
+  *)
+    echo "Error: MAESTRO_X402_ALLOW_SHELL_SIGNER must be 0 or 1." >&2
+    exit 1
+    ;;
+esac
+
 case "$AUTH_MODE" in
   auto|api-key|x402)
     ;;
@@ -45,17 +70,20 @@ trim_line() {
   printf "%s" "$value" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
 }
 
-decode_base64() {
-  local encoded="$1"
-  if printf "%s" "$encoded" | base64 --decode >/dev/null 2>&1; then
-    printf "%s" "$encoded" | base64 --decode
+fingerprint_value() {
+  local value="$1"
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf "%s" "$value" | sha256sum | awk '{print $1}'
     return 0
   fi
-  if printf "%s" "$encoded" | base64 -d >/dev/null 2>&1; then
-    printf "%s" "$encoded" | base64 -d
+
+  if command -v shasum >/dev/null 2>&1; then
+    printf "%s" "$value" | shasum -a 256 | awk '{print $1}'
     return 0
   fi
-  return 1
+
+  printf "%s" "$value" | cksum | awk '{print $1}'
 }
 
 cleanup_response_files() {
@@ -86,6 +114,50 @@ get_response_header() {
       if (last != "") print last
     }
   ' "$header_file"
+}
+
+run_signer_command() {
+  local output
+  local status
+
+  if [ "$X402_ALLOW_SHELL_SIGNER" = "1" ]; then
+    if [ "$X402_SIGNER_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
+      if output="$(timeout "$X402_SIGNER_TIMEOUT" bash -lc "$X402_SIGNER")"; then
+        printf "%s" "$output"
+        return 0
+      fi
+    else
+      if output="$(bash -lc "$X402_SIGNER")"; then
+        printf "%s" "$output"
+        return 0
+      fi
+    fi
+    status=$?
+    echo "Error: MAESTRO_X402_SIGNER command failed (exit $status)." >&2
+    return "$status"
+  fi
+
+  if [ ! -f "$X402_SIGNER" ] || [ ! -x "$X402_SIGNER" ]; then
+    echo "Error: MAESTRO_X402_SIGNER must be an executable file path." >&2
+    echo "Set MAESTRO_X402_ALLOW_SHELL_SIGNER=1 only if you intentionally need shell command execution." >&2
+    return 1
+  fi
+
+  if [ "$X402_SIGNER_TIMEOUT" -gt 0 ] && command -v timeout >/dev/null 2>&1; then
+    if output="$(timeout "$X402_SIGNER_TIMEOUT" "$X402_SIGNER")"; then
+      printf "%s" "$output"
+      return 0
+    fi
+  else
+    if output="$("$X402_SIGNER")"; then
+      printf "%s" "$output"
+      return 0
+    fi
+  fi
+
+  status=$?
+  echo "Error: MAESTRO_X402_SIGNER command failed (exit $status)." >&2
+  return "$status"
 }
 
 run_http_request() {
@@ -158,12 +230,13 @@ resolve_x402_payment_signature() {
     MAESTRO_X402_CONTENT_TYPE="$content_type" \
     MAESTRO_X402_NETWORK="$NETWORK" \
     MAESTRO_X402_ATTEMPT="$attempt" \
-    bash -lc "$X402_SIGNER"
+    run_signer_command
   )"; then
-    echo "Error: MAESTRO_X402_SIGNER command failed." >&2
     return 1
   fi
 
+  signature="$(trim_line "$signature")"
+  signature="$(printf "%s\n" "$signature" | awk 'NF{line=$0} END{print line}')"
   signature="$(trim_line "$signature")"
   signature="$(echo "$signature" | sed -E 's/^[Pp][Aa][Yy][Mm][Ee][Nn][Tt]-[Ss][Ii][Gg][Nn][Aa][Tt][Uu][Rr][Ee]:[[:space:]]*//')"
   signature="$(trim_line "$signature")"
@@ -199,11 +272,7 @@ request_with_x402() {
     fi
 
     if [ "$X402_DEBUG" = "1" ]; then
-      echo "x402 challenge (base64): $payment_required" >&2
-      if decode_base64 "$payment_required" >/dev/null 2>&1; then
-        echo "x402 challenge (decoded JSON):" >&2
-        decode_base64 "$payment_required" >&2 || true
-      fi
+      echo "x402 challenge received (bytes=${#payment_required}, fingerprint=$(fingerprint_value "$payment_required"))." >&2
     fi
 
     if [ "$retries" -ge "$X402_MAX_RETRIES" ]; then
@@ -260,9 +329,8 @@ perform_request() {
     if [ -n "$payment_response" ]; then
       echo >&2
       echo "PAYMENT-RESPONSE: $payment_response" >&2
-      if [ "$X402_DEBUG" = "1" ] && decode_base64 "$payment_response" >/dev/null 2>&1; then
-        echo "PAYMENT-RESPONSE (decoded JSON):" >&2
-        decode_base64 "$payment_response" >&2 || true
+      if [ "$X402_DEBUG" = "1" ]; then
+        echo "PAYMENT-RESPONSE fingerprint: $(fingerprint_value "$payment_response")" >&2
       fi
     fi
   fi
@@ -902,7 +970,9 @@ CONFIGURATION:
   MAESTRO_X402_SIGNER           - Command that prints PAYMENT-SIGNATURE for a challenge
   MAESTRO_X402_PAYMENT_SIGNATURE - Static PAYMENT-SIGNATURE override (optional)
   MAESTRO_X402_MAX_RETRIES      - x402 challenge retries (default: 1)
-  MAESTRO_X402_DEBUG            - Set to 1 to print decoded x402 challenge metadata
+  MAESTRO_X402_SIGNER_TIMEOUT   - Max signer runtime in seconds (default: 30, 0 disables timeout)
+  MAESTRO_X402_ALLOW_SHELL_SIGNER - 0: signer must be executable path, 1: allow shell command execution
+  MAESTRO_X402_DEBUG            - Set to 1 to print redacted challenge/receipt fingerprints
   MAESTRO_SHOW_PAYMENT_RESPONSE - Set to 1 to print PAYMENT-RESPONSE header on success
 
 EXAMPLES:
