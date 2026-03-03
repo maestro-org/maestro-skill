@@ -52,6 +52,7 @@ Do not ask for API keys for x402 flow.
 
 Treat purchases as fixed tiers. Arbitrary prices are rejected.
 
+- Base credit cost: `$0.000025` per credit
 - `$0.10` -> `4,000` credits
 - `$1.00` -> `40,000` credits
 - `$5.00` -> `200,000` credits
