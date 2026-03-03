@@ -1,116 +1,117 @@
 ---
 name: maestro-bitcoin
-description: Query Maestro Bitcoin APIs directly over HTTP using x402 USDC payments, with Ethereum mainnet as the default production path. Support either PRIVATE_KEY signing or CDP Agent Wallet, and ask for only minimal wallet prerequisites.
+description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 credit purchase flow, defaulting to Ethereum mainnet for production and asking for minimal wallet prerequisites.
 ---
 
 # Maestro Bitcoin Skill
 
-This skill is intentionally simple: query Maestro APIs directly with x402.
+Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the current x402 client flow.
 
-## Default Production Mode (Use First)
+## Default Production Network Policy (Mainnet-First)
 
-- Preferred network for production calls: `eip155:1` (Ethereum mainnet).
-- Secondary network: `eip155:8453` (Base mainnet), only when user asks for Base or approves fallback.
+- Preferred production network: `eip155:1` (Ethereum mainnet).
+- Secondary production network: `eip155:8453` (Base mainnet), only when user asks for Base or approves fallback.
 - Use production hosts by default.
 - Use `dev.` host variants only when user explicitly asks for testing/staging.
-- Do not switch to testnet automatically for mainnet requests.
+- Never switch to testnet automatically for a mainnet request.
 
 ## Minimal Prerequisites To Request
 
-Ask for the smallest possible set of inputs:
+Ask only for what is required to pay and sign:
 
-- Wallet path A (raw signer): `PRIVATE_KEY` for a dedicated EVM wallet.
-- Wallet path B (managed signer): CDP Agent Wallet already provisioned in runtime.
-- Optional `WALLET_NETWORK` (default to `eip155:1` if omitted).
+- Wallet option A: `PRIVATE_KEY` for a dedicated EVM signer.
+- Wallet option B: CDP Agent Wallet signer already available in runtime.
+- Optional `WALLET_NETWORK` (default `eip155:1` for production intent).
 
-Funding requirements (only what is needed to pay):
+Funding requirements (selected network only):
 
-- Enough `USDC` on the selected network for the current challenge amount.
-- Small `ETH` balance for gas on that same network.
+- Enough `USDC` for the chosen credit tier purchase.
+- Small `ETH` balance for gas.
 
-Never ask for API keys for x402 flow. Never ask for more wallet data than required.
+Do not ask for API keys for x402 flow.
 
-## CDP Agent Wallet Option
+## Client Interaction Flow (What To Expect)
 
-Agents may use Coinbase CDP Agent Wallet instead of raw private keys when user/runtime already supports it:
+1. Read endpoint specs from `https://docs.gomaestro.org/bitcoin`.
+2. Send the endpoint request without auth headers.
+3. Expect `402 Payment Required` with JSON body containing:
+   - `accepts` (purchase options)
+   - `extensions.sign-in-with-x` (`domain`, `nonce`, `statement`, `issued_at`, `expiration_time`, `supported_chains`)
+4. Build EIP-4361 SIWX message and sign with EIP-191 (`personal_sign`).
+5. Retry request with `Sign-In-With-X` header (base64 JSON: `{ "message": "...", "signature": "0x..." }`).
+6. Expect JWT in `Authorization: Bearer <token>` and usually another `402` with `accepts` (insufficient credits).
+7. Pick one offered credit tier from `accepts` for the selected network.
+8. Build `X-PAYMENT` (base64 JSON) using the selected tier fields and signed ERC-3009 authorization.
+9. Retry with:
+   - `Authorization: Bearer <token>`
+   - `X-PAYMENT: <base64 payload>`
+10. On success (`200`), return API body plus payment/credit metadata headers when present.
+11. For later calls, retry with JWT only until credits are low.
 
-- Docs: `https://docs.cdp.coinbase.com/agentic-wallet/welcome`
-- Use CDP-provided signer/account for x402 signing.
-- Keep the same network-selection rule: prefer `eip155:1` for mainnet.
-- Request only missing CDP prerequisites if unavailable; do not request both CDP secrets and `PRIVATE_KEY` unless user asks.
+## Credit Purchase Tiers (Current Gateway Expectations)
 
-## Workflow
+Treat purchases as fixed tiers. Arbitrary prices are rejected.
 
-1. Read endpoint specs from `https://docs.gomaestro.org/bitcoin` (or linked REST references there). All docs pages are available as markdowns by simply appending `.md` to the URL path, e.g. `https://docs.gomaestro.org/bitcoin/blockchain-indexer-api/addresses/utxos-by-address.md`.
-2. Send the endpoint request without `api-key`.
-3. If the gateway returns `402 Payment Required`, parse `PAYMENT-REQUIRED` (or response body equivalent).
-4. Select the payment option that matches `WALLET_NETWORK` (default `eip155:1`).
-5. Sign and retry with payment header(s): `PAYMENT-SIGNATURE` and/or `X-PAYMENT` depending client implementation.
-6. Return the API body and payment settlement metadata (`PAYMENT-RESPONSE` or `X-PAYMENT-RESPONSE`) when present.
+- `$0.10` -> `4,000` credits
+- `$1.00` -> `40,000` credits
+- `$5.00` -> `200,000` credits
+- `$10.00` -> `400,000` credits
+- `$50.00` -> `2,000,000` credits
 
-## x402 Headers
+Effective bounds:
 
-- `PAYMENT-REQUIRED`: payment challenge from the gateway.
-- `PAYMENT-SIGNATURE`: signed payment proof from the client.
-- `PAYMENT-RESPONSE`: payment/settlement metadata on success.
-- `X-PAYMENT` / `X-PAYMENT-RESPONSE`: alternate header pair used by some clients.
+- Minimum purchase: `$0.10`
+- Maximum purchase: `$50.00`
+
+## Headers You Should Handle
+
+Request headers:
+
+- `Sign-In-With-X` (SIWX auth attempt)
+- `Authorization: Bearer <jwt>` (session)
+- `X-PAYMENT` (credit purchase payload)
+
+Response headers:
+
+- `Authorization` (new JWT after SIWX)
+- `X-Credits-Remaining`
+- `X-Credit-Cost`
+- `X-Credits-Purchased` (on purchase)
+- `Payment-Response` (settlement metadata, base64 JSON)
+
+## Network Selection Rules
+
+- Keep mainnet-first defaults for production user intent.
+- Always choose from networks returned by the live challenge (`supported_chains` / `accepts`).
+- If only testnet networks are offered, explicitly tell the user and confirm before spending.
+- Do not hardcode recipient, asset, or amount outside challenge/tier data.
 
 ## Explorer Transaction Lookup
 
-After successful payment, extract `transaction` and `network` from `PAYMENT-RESPONSE` (or `X-PAYMENT-RESPONSE`) and return an explorer link.
+When `Payment-Response` is present, extract transaction hash + network and return an explorer link.
 
-- `eip155:1` (Ethereum mainnet): `https://etherscan.io/tx/<transaction_hash>`
-- `eip155:8453` (Base mainnet): `https://basescan.org/tx/<transaction_hash>`
+Mainnet mappings:
 
-If explorer mapping is unknown, still return:
+- `eip155:1` -> `https://etherscan.io/tx/<transaction_hash>`
+- `eip155:8453` -> `https://basescan.org/tx/<transaction_hash>`
 
-- raw transaction hash
-- network id from response
-- note that explorer URL could not be resolved automatically
+Common testnet mappings:
 
-## Recommended Client Stack
+- `eip155:11155111` -> `https://sepolia.etherscan.io/tx/<transaction_hash>`
+- `eip155:84532` -> `https://sepolia.basescan.org/tx/<transaction_hash>`
 
-Prefer current `@x402/*` client packages for compatibility with CAIP-2 networks such as `eip155:1` and `eip155:8453`.
-
-- Recommended: `@x402/fetch` + `@x402/evm`.
-- Avoid older `x402-fetch`/`x402` v1-only assumptions when challenge uses CAIP-2 network IDs.
-
-## General Transaction Initiation (Without x402 SDK)
-
-If `@x402/*` is unavailable, agents may initiate payment manually with any EVM signer.
-
-1. Send request and capture `402` challenge (`PAYMENT-REQUIRED` header or JSON body).
-2. Pick the payment option matching `WALLET_NETWORK` (default `eip155:1`).
-3. Build EIP-712 `TransferWithAuthorization` message using challenge fields:
-   `asset`, `payTo`, `amount`, `maxTimeoutSeconds`, and token metadata in `extra`.
-4. Sign typed data with wallet key.
-5. Build payment payload with:
-   `x402Version`, `scheme`, `network`, and signed authorization payload.
-6. Base64-encode the payload and retry request with `PAYMENT-SIGNATURE` and/or `X-PAYMENT`.
-7. Verify success via HTTP `200` and `PAYMENT-RESPONSE`/`X-PAYMENT-RESPONSE`.
-
-Manual flow is valid, but preferred only as fallback because protocol/encoding details are easy to get wrong.
+If mapping is unknown, still return raw hash + network.
 
 ## Rules For Agents
 
-- Do not hardcode payment amount, recipient, or network; use `PAYMENT-REQUIRED` each time.
-- If user asked for mainnet, enforce `eip155:1` selection unless user explicitly requested Base mainnet.
-- Ask before any fallback network (`eip155:8453`) or any move to testnet.
-- Support both wallet modes: `PRIVATE_KEY` signer or CDP Agent Wallet signer.
-- If user intent is unclear, confirm before sending the first paid mainnet request (real USDC spend).
-- Re-run challenge flow if payment verification fails or challenge details change.
-- If no funded wallet is available, stop and ask only for missing minimum inputs.
 - Keep implementation direct and endpoint-specific.
-
-## Minimal Failure Handling
-
-If paid retry returns `402` again, report concise diagnostics:
-
-1. Selected payment network.
-2. Challenge amount and token.
-3. Wallet address used for signing.
-4. Next required user action:
-   fund USDC and gas on the selected mainnet network, then retry.
+- Support both signer modes: `PRIVATE_KEY` or CDP Agent Wallet signer.
+- Confirm before the first paid mainnet request (real USDC spend).
+- If paid retry still returns `402`, report:
+  1. Selected network
+  2. Selected price tier
+  3. Wallet address used for signing
+  4. Minimal next action (fund USDC/gas or re-run SIWX + payment)
 
 ## Primary Source
 
