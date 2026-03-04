@@ -74,11 +74,34 @@ Request headers:
 
 Response headers:
 
-- `Authorization` (new JWT after SIWX)
-- `X-Credits-Remaining`
-- `X-Credit-Cost`
-- `X-Credits-Purchased` (on purchase)
-- `Payment-Response` (settlement metadata, base64 JSON)
+- `Authorization` (new JWT after successful SIWX auth)
+- `X-Credits-Remaining` (present on successful charged requests)
+- `X-Credit-Cost` (present on successful charged requests)
+- `X-Credits-Purchased` (only when that request included a successful purchase)
+- `Payment-Response` (only when that request settled payment; base64 JSON)
+
+### Header Behavior by Outcome
+
+1. Success with existing credits (`200`):
+   - Expect `X-Credits-Remaining` and `X-Credit-Cost`.
+   - Do not expect `X-Credits-Purchased` or `Payment-Response`.
+
+2. Success with purchase + charge (`200`):
+   - Expect `X-Credits-Remaining`, `X-Credit-Cost`, `X-Credits-Purchased`, `Payment-Response`.
+
+3. Credits exhausted / insufficient (`402`):
+   - Body contains payment options (`accepts`) and typically `error`.
+   - Usually no credit balance headers (`X-Credits-*`) because no successful deduction completed.
+   - If SIWX happened on the same request, `Authorization: Bearer <new_jwt>` can still be present.
+
+4. SIWX expired or invalid message (`402`):
+   - Treat as unauthenticated retry path.
+   - Expect fresh challenge body with `accepts` + `extensions.sign-in-with-x` (new nonce).
+   - Usually no `Authorization` header.
+
+5. SIWX nonce expired/replayed (`401`):
+   - Expect JSON error response.
+   - Do not expect credit headers.
 
 ## Network Selection Rules
 

@@ -19,6 +19,22 @@ Published on ClawHub: https://clawhub.ai/Vardominator/maestro-skill
 5. Choose a purchase amount in range, sign ERC-3009 authorization, retry with `Authorization` + `X-PAYMENT`.
 6. On success, read response plus credit headers (`X-Credits-Remaining`, `X-Credit-Cost`, `X-Credits-Purchased`) and `Payment-Response` when present.
 
+## Header Semantics
+
+- `Authorization`: New JWT after successful SIWX auth.
+- `X-Credits-Remaining`: Remaining credits after a successful charged request.
+- `X-Credit-Cost`: Credits consumed by the request path.
+- `X-Credits-Purchased`: Credits added by payment on that request (purchase path only).
+- `Payment-Response`: Settlement metadata (base64 JSON), typically includes tx hash.
+
+Outcome expectations:
+
+- `200` with existing credits: `X-Credits-Remaining` + `X-Credit-Cost`.
+- `200` with purchase: adds `X-Credits-Purchased` + `Payment-Response`.
+- `402` insufficient credits: usually no `X-Credits-*`; body contains `accepts`.
+- `402` SIWX expired/invalid message: fresh challenge (`accepts` + `extensions.sign-in-with-x`).
+- `401` SIWX nonce expired/replayed: error JSON, no credit headers.
+
 ## Credit Purchase Amounts
 
 - Base credit cost: `$0.000025` per credit.
