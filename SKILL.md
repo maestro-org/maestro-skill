@@ -13,7 +13,6 @@ Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the cur
 - Secondary production network: `eip155:8453` (Base mainnet), only when user asks for Base or approves fallback.
 - Use production hosts by default.
 - Use `dev.` host variants only when user explicitly asks for testing/staging.
-- Never switch to testnet automatically for a mainnet request.
 
 ## Minimal Prerequisites To Request
 
@@ -107,7 +106,6 @@ Response headers:
 
 - Keep mainnet-first defaults for production user intent.
 - Always choose from networks returned by the live challenge (`supported_chains` / `accepts`).
-- If only testnet networks are offered, explicitly tell the user and confirm before spending.
 - Do not hardcode recipient, asset, or amount outside challenge data.
 
 ## Explorer Transaction Lookup
@@ -118,11 +116,6 @@ Mainnet mappings:
 
 - `eip155:1` -> `https://etherscan.io/tx/<transaction_hash>`
 - `eip155:8453` -> `https://basescan.org/tx/<transaction_hash>`
-
-Common testnet mappings:
-
-- `eip155:11155111` -> `https://sepolia.etherscan.io/tx/<transaction_hash>`
-- `eip155:84532` -> `https://sepolia.basescan.org/tx/<transaction_hash>`
 
 If mapping is unknown, still return raw hash + network.
 
