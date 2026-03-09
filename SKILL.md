@@ -200,16 +200,7 @@ When credits are exhausted, the server returns `402` with `"error": "insufficien
 
 - Base credit cost: `$0.000025` per credit.
 - Prices are in USDC atomic units (`1000000 = 1 USDC`).
-- Any amount between `$0.10` and `$50.00` can be purchased — there are no fixed tiers. Credits are calculated as `floor(amount * credits_per_token)`.
-
-| Example Amount | USDC Atomic Units | Credits |
-|---|---|---|
-| $0.10 (minimum) | `100000` | `4,000` |
-| $0.50 | `500000` | `20,000` |
-| $1.00 | `1000000` | `40,000` |
-| $5.00 | `5000000` | `200,000` |
-| $10.00 | `10000000` | `400,000` |
-| $50.00 (maximum) | `50000000` | `2,000,000` |
+- Any amount between `min_price` and `max_price` (from the 402 response's `accepts[].extra`) can be purchased — there are no fixed tiers. Credits are calculated as `floor(amount * credits_per_token)`.
 
 ## Headers Reference
 
