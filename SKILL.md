@@ -1,123 +1,273 @@
 ---
 name: maestro-bitcoin
-description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 credit purchase flow, defaulting to Ethereum mainnet for production and asking for minimal wallet prerequisites.
+description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 credit purchase flow.
 ---
 
 # Maestro Bitcoin Skill
 
-Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the current x402 client flow.
+Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow.
 
-## Default Production Network Policy (Mainnet-First)
+## Available Networks
 
-- Preferred production network: `eip155:1` (Ethereum mainnet).
-- Secondary production network: `eip155:8453` (Base mainnet), only when user asks for Base or approves fallback.
-- Use production hosts by default.
-- Use `dev.` host variants only when user explicitly asks for testing/staging.
+| Network | CAIP-2 Chain ID |
+|---|---|
+| Ethereum mainnet | `eip155:1` |
+| Base mainnet | `eip155:8453` |
+| Ethereum Sepolia (testnet) | `eip155:11155111` |
+| Base Sepolia (testnet) | `eip155:84532` |
 
-## Minimal Prerequisites To Request
+The server's 402 response lists which networks are currently active in `accepts` and `extensions.sign-in-with-x.supported_chains`. Always select from these live values — do not hardcode `asset`, `pay_to`, or `price` outside the challenge data.
+
+Use production hosts by default. Use `dev.` host variants only when user explicitly asks for testing/staging.
+
+## Minimal Prerequisites
 
 Ask only for what is required to pay and sign:
 
-- Wallet option A: `PRIVATE_KEY` for a dedicated EVM signer.
-- Wallet option B: CDP Agent Wallet signer already available in runtime.
-- Optional `WALLET_NETWORK` (default `eip155:1` for production intent).
+- **Wallet option A:** `PRIVATE_KEY` for a dedicated EVM signer.
+- **Wallet option B:** CDP Agent Wallet signer already available in runtime.
 
-Funding requirements (selected network only):
+Funding requirements (on the selected network):
 
 - Enough `USDC` for the selected credit purchase amount.
 - Small `ETH` balance for gas.
 
-Do not ask for API keys for x402 flow.
+Do not ask for API keys — the x402 flow uses wallet-based authentication only.
 
-## Client Interaction Flow (What To Expect)
+## Client Interaction Flow
 
-1. Read endpoint specs from `https://docs.gomaestro.org/bitcoin`.
-2. Send the endpoint request without auth headers.
-3. Expect `402 Payment Required` with JSON body containing:
-   - `accepts` (payment options)
-   - `extensions.sign-in-with-x` (`domain`, `nonce`, `statement`, `issued_at`, `expiration_time`, `supported_chains`)
-4. Build EIP-4361 SIWX message and sign with EIP-191 (`personal_sign`).
-5. Retry request with `Sign-In-With-X` header (base64 JSON: `{ "message": "...", "signature": "0x..." }`).
-6. Expect JWT in `Authorization: Bearer <token>` and usually another `402` when credits are insufficient.
-7. Choose a credit purchase amount within the allowed range for the selected network.
-8. Build `X-PAYMENT` (base64 JSON) using the selected amount and signed ERC-3009 authorization.
-9. Retry with:
-   - `Authorization: Bearer <token>`
-   - `X-PAYMENT: <base64 payload>`
-10. On success (`200`), return API body plus payment/credit metadata headers when present.
-11. For later calls, retry with JWT only until credits are low.
+### Step 1: Initial Request → 402 Challenge
 
-## Credit Purchase Amount Rules
+Send the endpoint request without auth headers.
+
+The server responds with `402 Payment Required` containing a JSON body:
+
+```json
+{
+  "extensions": {
+    "sign-in-with-x": {
+      "domain": "api.gomaestro.org",
+      "nonce": "uuid-v4",
+      "statement": "Sign in to Maestro API Gateway",
+      "issued_at": "2026-03-09T21:34:00Z",
+      "expiration_time": "2026-03-09T21:39:00Z",
+      "supported_chains": ["eip155:84532", "eip155:11155111"]
+    }
+  },
+  "accepts": [
+    {
+      "scheme": "exact",
+      "network": "eip155:11155111",
+      "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+      "pay_to": "0x2C89b6545eeB377C12bC877F49F81e76587419B5",
+      "price": "100000",
+      "extra": {
+        "name": "USDC",
+        "version": "2",
+        "min_price": "100000",
+        "max_price": "50000000",
+        "credits_per_token": "0.04"
+      }
+    }
+  ]
+}
+```
+
+### Step 2: SIWX Authentication → JWT
+
+Build an EIP-4361 message and sign it with EIP-191 (`personal_sign`).
+
+**Critical: The `Chain ID` field must use the full CAIP-2 format** (e.g. `eip155:11155111`), not just the numeric chain ID (`11155111`). This value must match one of the `supported_chains` from the challenge.
+
+```
+api.gomaestro.org wants you to sign in with your Ethereum account:
+0xYourWalletAddress
+
+Sign in to Maestro API Gateway
+
+URI: https://api.gomaestro.org
+Version: 1
+Chain ID: eip155:11155111
+Nonce: <nonce from challenge>
+Issued At: <issued_at from challenge>
+Expiration Time: <expiration_time from challenge>
+```
+
+Sign this message with EIP-191 `personal_sign`, then send it as a base64-encoded JSON header:
+
+```
+sign-in-with-x: base64({ "message": "<the full message above>", "signature": "0x..." })
+```
+
+Use standard base64 encoding (with `=` padding). The header name is lowercase `sign-in-with-x`.
+
+The server responds with `402` (insufficient credits), but now includes a JWT:
+
+```
+Authorization: Bearer <jwt>
+```
+
+The JWT is valid for ~1 hour. Use it for all subsequent requests.
+
+### Step 3: Credit Purchase
+
+Choose a purchase amount within the allowed range from `accepts[].extra` fields (`min_price` to `max_price`, in USDC atomic units where `1000000 = 1 USDC`).
+
+Sign an ERC-3009 `TransferWithAuthorization` using EIP-712 typed data:
+
+**EIP-712 Domain** (values from `accepts[].extra` and `accepts[].asset`):
+
+```json
+{
+  "name": "USDC",
+  "version": "2",
+  "chainId": 11155111,
+  "verifyingContract": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+}
+```
+
+Note: `chainId` in the EIP-712 domain is the **numeric** chain ID (not the CAIP-2 string).
+
+**EIP-712 Types:**
+
+```json
+{
+  "TransferWithAuthorization": [
+    { "name": "from", "type": "address" },
+    { "name": "to", "type": "address" },
+    { "name": "value", "type": "uint256" },
+    { "name": "validAfter", "type": "uint256" },
+    { "name": "validBefore", "type": "uint256" },
+    { "name": "nonce", "type": "bytes32" }
+  ]
+}
+```
+
+**EIP-712 Message:**
+
+```json
+{
+  "from": "0xYourWalletAddress",
+  "to": "<pay_to from accepts>",
+  "value": 100000,
+  "validAfter": 0,
+  "validBefore": 1773097421,
+  "nonce": "0x<random 32 bytes hex>"
+}
+```
+
+Build the `X-PAYMENT` header as base64-encoded JSON with this exact structure:
+
+```json
+{
+  "x402Version": 2,
+  "scheme": "exact",
+  "network": "eip155:11155111",
+  "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+  "pay_to": "0x2C89b6545eeB377C12bC877F49F81e76587419B5",
+  "price": "100000",
+  "nonce": "0x<same nonce as authorization>",
+  "payload": {
+    "signature": "0x<EIP-712 signature>",
+    "authorization": {
+      "from": "0xYourWalletAddress",
+      "to": "0x2C89b6545eeB377C12bC877F49F81e76587419B5",
+      "value": "100000",
+      "validAfter": "0",
+      "validBefore": "1773097421",
+      "nonce": "0x<same nonce>"
+    }
+  }
+}
+```
+
+**Important:** All values inside `payload.authorization` must be **strings**. The top-level `price` is also a string. The `nonce` must be a `0x`-prefixed hex string of 32 random bytes.
+
+Send the request with both headers:
+
+```
+Authorization: Bearer <jwt from step 2>
+X-PAYMENT: base64(<payment JSON>)
+```
+
+### Step 4: Success
+
+On success (`200`), the response contains the API data plus credit metadata headers. Use the JWT for all subsequent requests.
+
+### Step 5: Repeat Queries
+
+Use the JWT from the `Authorization` response header for subsequent requests. Each successful request deducts credits.
+
+When credits are exhausted, the server returns `402` with `"error": "insufficient credits"`. Repeat from Step 3 to purchase more.
+
+## Credit Economics
 
 - Base credit cost: `$0.000025` per credit.
-- Purchases can use any amount in the allowed range.
+- Prices are in USDC atomic units (`1000000 = 1 USDC`).
 
-Current bounds:
+| Purchase Amount | USDC Atomic Units | Credits |
+|---|---|---|
+| $0.10 (minimum) | `100000` | `4,000` |
+| $1.00 | `1000000` | `40,000` |
+| $5.00 | `5000000` | `200,000` |
+| $10.00 | `10000000` | `400,000` |
+| $50.00 (maximum) | `50000000` | `2,000,000` |
 
-- Minimum purchase: `$0.10` (`4,000` credits)
-- Maximum purchase: `$50.00` (`2,000,000` credits)
+## Headers Reference
 
-Common example amounts:
+### Request Headers
 
-- `$1.00` -> `40,000` credits
-- `$5.00` -> `200,000` credits
-- `$10.00` -> `400,000` credits
+| Header | When | Format |
+|---|---|---|
+| `sign-in-with-x` | SIWX auth (step 2) | Base64 JSON: `{ "message", "signature" }` |
+| `Authorization` | After SIWX (steps 3+) | `Bearer <jwt>` |
+| `X-PAYMENT` | Credit purchase (step 3) | Base64 JSON: x402 v2 payment payload |
 
-## Headers You Should Handle
+### Response Headers
 
-Request headers:
+| Header | When | Description |
+|---|---|---|
+| `Authorization` | After successful SIWX | `Bearer <new_jwt>` (valid ~1 hour) |
+| `X-Credits-Remaining` | Successful charged request | Credits left after deduction |
+| `X-Credit-Cost` | Successful charged request | Credits deducted for this request |
+| `X-Credits-Purchased` | Successful purchase | Credits added from payment |
+| `Payment-Response` | Successful settlement | Base64 JSON with `txHash` |
 
-- `Sign-In-With-X` (SIWX auth attempt)
-- `Authorization: Bearer <jwt>` (session)
-- `X-PAYMENT` (credit purchase payload)
+### Response Scenarios
 
-Response headers:
+| Scenario | Status | Key Headers/Body |
+|---|---|---|
+| No auth | `402` | Body: `accepts` + `extensions.sign-in-with-x` |
+| SIWX success, no credits | `402` | `Authorization` header with JWT; body: `accepts` + `"error": "insufficient credits"` |
+| SIWX nonce expired/replayed | `401` | JSON error body |
+| Purchase + query success | `200` | `X-Credits-Remaining`, `X-Credit-Cost`, `X-Credits-Purchased`, `Payment-Response` |
+| Query with existing credits | `200` | `X-Credits-Remaining`, `X-Credit-Cost` |
+| Credits exhausted | `402` | Body: `accepts` + `"error": "insufficient credits"` |
 
-- `Authorization` (new JWT after successful SIWX auth)
-- `X-Credits-Remaining` (present on successful charged requests)
-- `X-Credit-Cost` (present on successful charged requests)
-- `X-Credits-Purchased` (only when that request included a successful purchase)
-- `Payment-Response` (only when that request settled payment; base64 JSON)
+## Common Pitfalls
 
-### Header Behavior by Outcome
+1. **Chain ID format in SIWE message:** Must be CAIP-2 format (`eip155:11155111`), not just the number (`11155111`). The gateway validates this against `supported_chains`.
 
-1. Success with existing credits (`200`):
-   - Expect `X-Credits-Remaining` and `X-Credit-Cost`.
-   - Do not expect `X-Credits-Purchased` or `Payment-Response`.
+2. **Authorization values must be strings:** All fields inside `payload.authorization` (`value`, `validAfter`, `validBefore`) must be string types, not numbers.
 
-2. Success with purchase + charge (`200`):
-   - Expect `X-Credits-Remaining`, `X-Credit-Cost`, `X-Credits-Purchased`, `Payment-Response`.
+3. **Use standard base64:** Both `sign-in-with-x` and `X-PAYMENT` headers use standard base64 with `=` padding (not URL-safe base64).
 
-3. Credits exhausted / insufficient (`402`):
-   - Body contains payment options (`accepts`) and typically `error`.
-   - Usually no credit balance headers (`X-Credits-*`) because no successful deduction completed.
-   - If SIWX happened on the same request, `Authorization: Bearer <new_jwt>` can still be present.
+4. **Nonce is single-use:** Each SIWX nonce from the challenge can only be used once and expires in 5 minutes. If auth fails, request a fresh challenge.
 
-4. SIWX expired or invalid message (`402`):
-   - Treat as unauthenticated retry path.
-   - Expect fresh challenge body with `accepts` + `extensions.sign-in-with-x` (new nonce).
-   - Usually no `Authorization` header.
+5. **Fresh challenge per attempt:** Each 402 response contains a fresh nonce. Always use the nonce from the most recent 402 response.
 
-5. SIWX nonce expired/replayed (`401`):
-   - Expect JSON error response.
-   - Do not expect credit headers.
-
-## Network Selection Rules
-
-- Keep mainnet-first defaults for production user intent.
-- Always choose from networks returned by the live challenge (`supported_chains` / `accepts`).
-- Do not hardcode recipient, asset, or amount outside challenge data.
+6. **Don't hardcode addresses:** Always use `asset`, `pay_to`, `price`, and `extra` values from the live 402 response.
 
 ## Explorer Transaction Lookup
 
-When `Payment-Response` is present, extract transaction hash + network and return an explorer link.
+When `Payment-Response` is present, extract the transaction hash and provide an explorer link:
 
-Mainnet mappings:
-
-- `eip155:1` -> `https://etherscan.io/tx/<transaction_hash>`
-- `eip155:8453` -> `https://basescan.org/tx/<transaction_hash>`
-
-If mapping is unknown, still return raw hash + network.
+| Network | Explorer URL |
+|---|---|
+| `eip155:1` | `https://etherscan.io/tx/<tx_hash>` |
+| `eip155:8453` | `https://basescan.org/tx/<tx_hash>` |
+| `eip155:11155111` | `https://sepolia.etherscan.io/tx/<tx_hash>` |
+| `eip155:84532` | `https://sepolia.basescan.org/tx/<tx_hash>` |
 
 ## Rules For Agents
 
