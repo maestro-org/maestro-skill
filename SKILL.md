@@ -117,8 +117,8 @@ Sign an ERC-3009 `TransferWithAuthorization` using EIP-712 typed data:
 {
   "name": "USDC",
   "version": "2",
-  "chainId": 11155111,
-  "verifyingContract": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238"
+  "chainId": 1,
+  "verifyingContract": "<asset from accepts>"
 }
 ```
 
