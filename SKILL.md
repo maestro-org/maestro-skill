@@ -13,12 +13,8 @@ Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x40
 |---|---|
 | Ethereum mainnet | `eip155:1` |
 | Base mainnet | `eip155:8453` |
-| Ethereum Sepolia (testnet) | `eip155:11155111` |
-| Base Sepolia (testnet) | `eip155:84532` |
 
 The server's 402 response lists which networks are currently active in `accepts` and `extensions.sign-in-with-x.supported_chains`. Always select from these live values — do not hardcode `asset`, `pay_to`, or `price` outside the challenge data.
-
-Use production hosts by default. Use `dev.` host variants only when user explicitly asks for testing/staging.
 
 ## Minimal Prerequisites
 
@@ -266,8 +262,6 @@ When `Payment-Response` is present, extract the transaction hash and provide an 
 |---|---|
 | `eip155:1` | `https://etherscan.io/tx/<tx_hash>` |
 | `eip155:8453` | `https://basescan.org/tx/<tx_hash>` |
-| `eip155:11155111` | `https://sepolia.etherscan.io/tx/<tx_hash>` |
-| `eip155:84532` | `https://sepolia.basescan.org/tx/<tx_hash>` |
 
 ## Rules For Agents
 
