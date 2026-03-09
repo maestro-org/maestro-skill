@@ -47,15 +47,15 @@ The server responds with `402 Payment Required` containing a JSON body:
       "statement": "Sign in to Maestro API Gateway",
       "issued_at": "2026-03-09T21:34:00Z",
       "expiration_time": "2026-03-09T21:39:00Z",
-      "supported_chains": ["eip155:84532", "eip155:11155111"]
+      "supported_chains": ["eip155:1", "eip155:8453"]
     }
   },
   "accepts": [
     {
       "scheme": "exact",
-      "network": "eip155:11155111",
-      "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-      "pay_to": "0x2C89b6545eeB377C12bC877F49F81e76587419B5",
+      "network": "eip155:1",
+      "asset": "0x...",
+      "pay_to": "0x...",
       "price": "100000",
       "extra": {
         "name": "USDC",
@@ -73,7 +73,7 @@ The server responds with `402 Payment Required` containing a JSON body:
 
 Build an EIP-4361 message and sign it with EIP-191 (`personal_sign`).
 
-**Critical: The `Chain ID` field must use the full CAIP-2 format** (e.g. `eip155:11155111`), not just the numeric chain ID (`11155111`). This value must match one of the `supported_chains` from the challenge.
+**Critical: The `Chain ID` field must use the full CAIP-2 format** (e.g. `eip155:1`), not just the numeric chain ID (`1`). This value must match one of the `supported_chains` from the challenge.
 
 ```
 api.gomaestro.org wants you to sign in with your Ethereum account:
@@ -83,7 +83,7 @@ Sign in to Maestro API Gateway
 
 URI: https://api.gomaestro.org
 Version: 1
-Chain ID: eip155:11155111
+Chain ID: eip155:1
 Nonce: <nonce from challenge>
 Issued At: <issued_at from challenge>
 Expiration Time: <expiration_time from challenge>
@@ -158,16 +158,16 @@ Build the `X-PAYMENT` header as base64-encoded JSON with this exact structure:
 {
   "x402Version": 2,
   "scheme": "exact",
-  "network": "eip155:11155111",
-  "asset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-  "pay_to": "0x2C89b6545eeB377C12bC877F49F81e76587419B5",
-  "price": "100000",
+  "network": "eip155:1",
+  "asset": "<asset from accepts>",
+  "pay_to": "<pay_to from accepts>",
+  "price": "<chosen amount as string>",
   "nonce": "0x<same nonce as authorization>",
   "payload": {
     "signature": "0x<EIP-712 signature>",
     "authorization": {
       "from": "0xYourWalletAddress",
-      "to": "0x2C89b6545eeB377C12bC877F49F81e76587419B5",
+      "to": "<pay_to from accepts>",
       "value": "100000",
       "validAfter": "0",
       "validBefore": "1773097421",
@@ -235,7 +235,7 @@ When credits are exhausted, the server returns `402` with `"error": "insufficien
 
 ## Common Pitfalls
 
-1. **Chain ID format in SIWE message:** Must be CAIP-2 format (`eip155:11155111`), not just the number (`11155111`). The gateway validates this against `supported_chains`.
+1. **Chain ID format in SIWE message:** Must be CAIP-2 format (`eip155:1`), not just the number (`1`). The gateway validates this against `supported_chains`.
 
 2. **Authorization values must be strings:** All fields inside `payload.authorization` (`value`, `validAfter`, `validBefore`) must be string types, not numbers.
 
