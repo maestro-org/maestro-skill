@@ -5,7 +5,7 @@ description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 cr
 
 # Maestro Bitcoin Skill
 
-Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow.
+Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs can be found here: `https://docs.gomaestro.org`.
 
 ## Available Networks
 
@@ -266,7 +266,3 @@ When `Payment-Response` is present, extract the transaction hash and provide an 
   2. Selected purchase amount
   3. Wallet address used for signing
   4. Minimal next action (fund USDC/gas or re-run SIWX + payment)
-
-## Primary Source
-
-- `https://docs.gomaestro.org/bitcoin`
