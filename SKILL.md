@@ -1,13 +1,32 @@
 ---
 name: maestro-bitcoin
-description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 credit purchase flow.
+description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 credit purchase flow, and resolve the exact endpoint URL from docs.gomaestro.org instead of assuming a base URL.
 ---
 
 # Maestro Bitcoin Skill
 
-Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs can be found here: `https://docs.gomaestro.org`.
+Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs live at `https://docs.gomaestro.org`.
 
-## Available Networks
+## Available Networks for API Requests
+
+| Chain | Network | Base URL |
+|---|---|---|
+| Bitcoin | Mainnet | `https://xbt-mainnet.gomaestro-api.org/v0` |
+| Bitcoin | Testnet4 | `https://xbt-testnet.gomaestro-api.org/v0` |
+| Cardano | Mainnet | `https://mainnet.gomaestro-api.org/v1` |
+| Cardano | Preprod | `https://preprod.gomaestro-api.org/v1` |
+| Cardano | Preview | `https://preview.gomaestro-api.org/v1` |
+| Dogecoin | Mainnet | `https://xdg-mainnet.gomaestro-api.org/v0` |
+| Dogecoin | Testnet | `https://xdg-testnet.gomaestro-api.org/v0` |
+
+Useful docs entry points:
+
+- `https://docs.gomaestro.org/quick-start/make-your-first-api-request`
+- `https://docs.gomaestro.org/quick-start/for-ai-agents`
+
+Important: the SIWX challenge fields may contain `domain: api.gomaestro.org` and `URI: https://api.gomaestro.org`, but those values are for authentication message construction only. They are not proof that the REST API request should go to `api.gomaestro.org`, and they must not be used to guess the endpoint host or version.
+
+## Available Networks for Payment
 
 | Network | CAIP-2 Chain ID |
 |---|---|
@@ -69,6 +88,8 @@ The server responds with `402 Payment Required` containing a JSON body:
 }
 ```
 
+This challenge tells you how to authenticate and pay. It does not tell you which REST base URL to use for the endpoint itself; keep taking the request URL from the docs page for that endpoint.
+
 ### Step 2: SIWX Authentication → JWT
 
 Build an EIP-4361 message and sign it with EIP-191 (`personal_sign`).
@@ -88,6 +109,8 @@ Nonce: <nonce from challenge>
 Issued At: <issued_at from challenge>
 Expiration Time: <expiration_time from challenge>
 ```
+
+The `domain` and `URI` above come from the 402 challenge and are only for the SIWX message. Do not reuse them as the request base URL.
 
 Sign this message with EIP-191 `personal_sign`, then send it as a base64-encoded JSON header:
 
