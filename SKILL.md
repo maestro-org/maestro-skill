@@ -5,7 +5,7 @@ description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 cr
 
 # Maestro Bitcoin Skill
 
-Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs live at `https://docs.gomaestro.org`. To find API specs for a particular Bitcoin endpoint, navigate the docs to that endpoint and use the URL shown in that page. All docs pages can be read by adding a .md suffix to the URL path (e.g. `https://docs.gomaestro.org/bitcoin` → `https://docs.gomaestro.org/bitcoin.md`).
+Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs live at `https://docs.gomaestro.org`. To find API specs for a particular Bitcoin endpoint, navigate the docs to that endpoint and use the URL shown in that page. There is a search bar that can be used for general queries. All docs pages can be read by adding a .md suffix to the URL path (e.g. `https://docs.gomaestro.org/bitcoin` → `https://docs.gomaestro.org/bitcoin.md`). 
 
 ## Available Networks for API Requests
 
