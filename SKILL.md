@@ -5,7 +5,7 @@ description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 cr
 
 # Maestro Bitcoin Skill
 
-Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs live at `https://docs.gomaestro.org`.
+Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs live at `https://docs.gomaestro.org`. To find API specs for a particular Bitcoin endpoint, navigate the docs to that endpoint and use the URL shown in that page. All docs pages can be read by adding a .md suffix to the URL path (e.g. `https://docs.gomaestro.org/bitcoin` → `https://docs.gomaestro.org/bitcoin.md`).
 
 ## Available Networks for API Requests
 
@@ -30,7 +30,7 @@ Important: the SIWX challenge fields may contain `domain: api.gomaestro.org` and
 
 | Network | CAIP-2 Chain ID |
 |---|---|
-| Ethereum mainnet | `eip155:1` |
+| (Default) Ethereum mainnet | `eip155:1` |
 | Base mainnet | `eip155:8453` |
 
 The server's 402 response lists which networks are currently active in `accepts` and `extensions.sign-in-with-x.supported_chains`. Always select from these live values — do not hardcode `asset`, `pay_to`, or `price` outside the challenge data.
