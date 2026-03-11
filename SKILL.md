@@ -1,39 +1,83 @@
 ---
-name: maestro-bitcoin
-description: Query Maestro Bitcoin APIs over HTTP using the SIWX + JWT + x402 credit purchase flow, and resolve the exact endpoint URL from docs.gomaestro.org instead of assuming a base URL.
+name: maestro-api
+description: Query Maestro APIs over HTTP using the SIWX + JWT + x402 credit purchase flow, and resolve the exact endpoint URL from docs.gomaestro.org instead of assuming a base URL.
 ---
 
-# Maestro Bitcoin Skill
+# Maestro API Skill
 
-Use this skill to call Maestro Bitcoin endpoints directly over HTTP with the x402 client flow. Maestro API specs live at `https://docs.gomaestro.org`. To find API specs for a particular Bitcoin endpoint, navigate the docs to that endpoint and use the URL shown in that page. There is a search bar that can be used for general queries. All docs pages can be read by adding a .md suffix to the URL path (e.g. `https://docs.gomaestro.org/bitcoin` → `https://docs.gomaestro.org/bitcoin.md`). 
+Use this skill to query Maestro APIs over HTTP with wallet-based SIWX auth and x402 credit purchases. The auth and payment flow is shared across Maestro surfaces. Examples below use Bitcoin endpoints because they are a common x402 entry point, but the endpoint-resolution workflow applies across Maestro docs.
 
-## Available Networks for API Requests
+Default execution pattern:
 
-| Chain | Network | Base URL |
-|---|---|---|
-| Bitcoin | Mainnet | `https://xbt-mainnet.gomaestro-api.org/v0` |
-| Bitcoin | Testnet4 | `https://xbt-testnet.gomaestro-api.org/v0` |
-| Cardano | Mainnet | `https://mainnet.gomaestro-api.org/v1` |
-| Cardano | Preprod | `https://preprod.gomaestro-api.org/v1` |
-| Cardano | Preview | `https://preview.gomaestro-api.org/v1` |
-| Dogecoin | Mainnet | `https://xdg-mainnet.gomaestro-api.org/v0` |
-| Dogecoin | Testnet | `https://xdg-testnet.gomaestro-api.org/v0` |
+1. Resolve the exact Maestro endpoint from `https://docs.gomaestro.org`.
+2. Call the endpoint without auth headers to get the live `402` challenge.
+3. Sign the SIWX challenge to obtain a JWT.
+4. If credits are needed, sign an ERC-3009 USDC payment and retry with `X-PAYMENT`.
+5. Reuse the JWT and remaining credits for follow-up queries.
+
+Docs pages can be read as markdown by appending `.md` to the page URL, for example `https://docs.gomaestro.org/bitcoin` -> `https://docs.gomaestro.org/bitcoin.md`.
+
+## Resolve The Exact Endpoint From Docs
 
 Useful docs entry points:
 
 - `https://docs.gomaestro.org/quick-start/make-your-first-api-request`
 - `https://docs.gomaestro.org/quick-start/for-ai-agents`
+- `https://docs.gomaestro.org/llms.txt`
+
+When the user asks for a specific Maestro API operation, resolve the exact endpoint from the docs before making any request.
+
+1. If you do not already know the exact docs page, start with `https://docs.gomaestro.org/llms.txt` or the docs search bar.
+2. Match the user request to the correct docs section before reading the page:
+   - Bitcoin -> `/bitcoin/...`
+   - Cardano -> `/cardano/...`
+   - Dogecoin -> `/dogecoin/...`
+3. Within the selected section, match the request to the correct API family before reading the page. For Bitcoin, common patterns are:
+   - `mempool-aware`, pending, real-time -> Mempool Monitoring API
+   - `esplora`, mempool.space-style -> Esplora API
+   - wallet activity / balances -> Wallet API
+   - generic confirmed chain data -> Blockchain Indexer API
+4. Open the docs page for the specific operation and read the `.md` version of that page.
+5. Use the page's `OpenAPI` block as the source of truth.
+6. Take the request path from the operation line, for example `get /mempool/addresses/{address}/utxos`.
+7. Take the base URL from the `servers:` section for the network you need.
+8. Combine `server.url + path`.
+
+Docs caveat: some operation pages show `security: api-key`. For this skill, still use the wallet-based x402 flow. Treat the path, parameters, response schema, and `servers:` list as authoritative, but do not switch to API-key auth.
+
+Example:
+
+- Docs page: `https://docs.gomaestro.org/bitcoin/mempool-monitoring-api/addresses/utxos-by-address-mempool-aware.md`
+- OpenAPI operation: `get /mempool/addresses/{address}/utxos`
+- Mainnet server: `https://xbt-mainnet.gomaestro-api.org/v0`
+- Final endpoint: `https://xbt-mainnet.gomaestro-api.org/v0/mempool/addresses/{address}/utxos`
+
+Prefer the operation page over quick-start pages whenever you need the exact path, query parameters, request body shape, or response schema.
 
 Important: the SIWX challenge fields may contain `domain: api.gomaestro.org` and `URI: https://api.gomaestro.org`, but those values are for authentication message construction only. They are not proof that the REST API request should go to `api.gomaestro.org`, and they must not be used to guess the endpoint host or version.
 
-## Available Networks for Payment
+## Network Reference
+
+### Common API Base URLs
+
+| Network | Base URL |
+|---|---|
+| Bitcoin Mainnet | `https://xbt-mainnet.gomaestro-api.org/v0` |
+| Bitcoin Testnet4 | `https://xbt-testnet.gomaestro-api.org/v0` |
+| Cardano Mainnet | `https://mainnet.gomaestro-api.org/v1` |
+| Cardano Preprod | `https://preprod.gomaestro-api.org/v1` |
+| Cardano Preview | `https://preview.gomaestro-api.org/v1` |
+| Dogecoin Mainnet | `https://xdg-mainnet.gomaestro-api.org/v0` |
+| Dogecoin Testnet | `https://xdg-testnet.gomaestro-api.org/v0` |
+
+### Payment Networks
 
 | Network | CAIP-2 Chain ID |
 |---|---|
 | (Default) Ethereum mainnet | `eip155:1` |
 | Base mainnet | `eip155:8453` |
 
-The server's 402 response lists which networks are currently active in `accepts` and `extensions.sign-in-with-x.supported_chains`. Always select from these live values — do not hardcode `asset`, `pay_to`, or `price` outside the challenge data.
+The server's `402` response lists which payment networks are currently active in `accepts` and `extensions.sign-in-with-x.supported_chains`. Always select from those live values.
 
 ## Minimal Prerequisites
 
@@ -42,12 +86,24 @@ Ask only for what is required to pay and sign:
 - **Wallet option A:** `PRIVATE_KEY` for a dedicated EVM signer.
 - **Wallet option B:** CDP Agent Wallet signer already available in runtime.
 
-Funding requirements (on the selected network):
+Funding requirements on the selected payment network:
 
 - Enough `USDC` for the selected credit purchase amount.
-- Small `ETH` balance for gas.
+- Small native gas balance (`ETH` on Ethereum, `ETH` on Base).
 
-Do not ask for API keys — the x402 flow uses wallet-based authentication only.
+Do not ask for API keys. The x402 flow uses wallet-based authentication only.
+
+## Quick Flow Summary
+
+1. Resolve the exact endpoint from the docs operation page.
+2. Call the endpoint without auth headers.
+3. Parse the `402` response and keep the latest `accepts[]` plus `extensions.sign-in-with-x`.
+4. Sign SIWX with `personal_sign` and retry with `sign-in-with-x`.
+5. If the response is `200`, the query succeeded with existing credits.
+6. If the response is `402` with `Authorization: Bearer <jwt>`, sign payment and retry with `Authorization` plus `X-PAYMENT`.
+7. Reuse the JWT until it expires or credits are exhausted.
+
+Across the initial request, SIWX retry, and payment retry, keep the same method, path, query parameters, and request body. Only the auth/payment headers should change.
 
 ## Client Interaction Flow
 
@@ -120,7 +176,7 @@ sign-in-with-x: base64({ "message": "<the full message above>", "signature": "0x
 
 Use standard base64 encoding (with `=` padding). The header name is lowercase `sign-in-with-x`.
 
-The server responds with `402` (insufficient credits), but now includes a JWT:
+If credits are already available, the server may return `200` here. Otherwise it typically returns `402` with `"error": "insufficient credits"` and includes a JWT:
 
 ```
 Authorization: Bearer <jwt>
@@ -130,22 +186,52 @@ The JWT is valid for ~1 hour. Use it for all subsequent requests.
 
 ### Step 3: Credit Purchase
 
-Choose a purchase amount within the allowed range from `accepts[].extra` fields (`min_price` to `max_price`, in USDC atomic units where `1000000 = 1 USDC`).
+From the most recent `402` response, pick one live `accepts[]` entry for the network you will use. Then choose a purchase amount within the allowed range from that entry's `extra` fields (`min_price` to `max_price`, in USDC atomic units where `1000000 = 1 USDC`).
+
+Do not reuse the SIWX signing rules for payment signing:
+
+- **SIWX auth** uses EIP-191 / `personal_sign` over the full EIP-4361 text message, with CAIP-2 chain ID like `eip155:1`.
+- **Credit purchase** uses EIP-712 typed data for ERC-3009 `TransferWithAuthorization`, with numeric chain ID like `1`.
 
 Sign an ERC-3009 `TransferWithAuthorization` using EIP-712 typed data:
 
-**EIP-712 Domain** (values from `accepts[].extra` and `accepts[].asset`):
+**EIP-712 Domain**
+
+Use:
+
+- `verifyingContract = accepts[].asset`
+- `chainId = numeric chain ID for the selected network`
+- `name` and `version` from the token contract's own EIP-712 domain when possible
+
+Do not assume the ERC-20 symbol or any display label is the correct EIP-712 domain name. If you can read the token contract, prefer calling `name()` and `version()` and using those exact values in the typed-data domain.
+
+Example for Ethereum mainnet USDC:
 
 ```json
 {
-  "name": "USDC",
+  "name": "USD Coin",
   "version": "2",
   "chainId": 1,
-  "verifyingContract": "<asset from accepts>"
+  "verifyingContract": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 }
 ```
 
 Note: `chainId` in the EIP-712 domain is the **numeric** chain ID (not the CAIP-2 string).
+
+Verified USDC token-domain values:
+
+| Network | Asset | `name()` | `version()` |
+|---|---|---|---|
+| `eip155:1` | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` | `USD Coin` | `2` |
+| `eip155:8453` | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | `USD Coin` | `2` |
+
+Recommended payment-signing checklist:
+
+1. Pick a live `accepts[]` entry for the network you will use.
+2. Use that entry's `asset` and `pay_to`, and set `price` plus authorization `value` to the chosen purchase amount.
+3. Resolve the token domain from the token contract itself when possible: `name()`, `version()`.
+4. Build the EIP-712 domain with numeric `chainId` and `verifyingContract = asset`.
+5. Sign the ERC-3009 message values you will actually send.
 
 **EIP-712 Types:**
 
@@ -169,11 +255,13 @@ Note: `chainId` in the EIP-712 domain is the **numeric** chain ID (not the CAIP-
   "from": "0xYourWalletAddress",
   "to": "<pay_to from accepts>",
   "value": 100000,
-  "validAfter": 0,
+  "validAfter": 1773093821,
   "validBefore": 1773097421,
   "nonce": "0x<random 32 bytes hex>"
 }
 ```
+
+For signing, `value`, `validAfter`, and `validBefore` are typed-data integers. In the transport payload below, those same values must be serialized as strings.
 
 Build the `X-PAYMENT` header as base64-encoded JSON with this exact structure:
 
@@ -192,7 +280,7 @@ Build the `X-PAYMENT` header as base64-encoded JSON with this exact structure:
       "from": "0xYourWalletAddress",
       "to": "<pay_to from accepts>",
       "value": "100000",
-      "validAfter": "0",
+      "validAfter": "1773093821",
       "validBefore": "1773097421",
       "nonce": "0x<same nonce>"
     }
@@ -201,6 +289,10 @@ Build the `X-PAYMENT` header as base64-encoded JSON with this exact structure:
 ```
 
 **Important:** All values inside `payload.authorization` must be **strings**. The top-level `price` is also a string. The `nonce` must be a `0x`-prefixed hex string of 32 random bytes.
+
+The signed `payload.authorization` values must exactly match the EIP-712 message values. Do not sign one set of numbers and send a different stringified payload.
+
+If a payment attempt needs to be retried after the signature has already been created, retry with the same encoded `X-PAYMENT` payload first. Do not immediately generate a fresh authorization with a new nonce.
 
 Send the request with both headers:
 
@@ -258,17 +350,23 @@ When credits are exhausted, the server returns `402` with `"error": "insufficien
 
 ## Common Pitfalls
 
-1. **Chain ID format in SIWE message:** Must be CAIP-2 format (`eip155:1`), not just the number (`1`). The gateway validates this against `supported_chains`.
+1. **Resolve the endpoint from docs, not auth metadata:** Use the docs operation page plus the `servers:` section. Do not derive the REST host from SIWX `domain` or `URI`.
 
-2. **Authorization values must be strings:** All fields inside `payload.authorization` (`value`, `validAfter`, `validBefore`) must be string types, not numbers.
+2. **Keep the two signing flows separate:** SIWX uses `personal_sign` and CAIP-2 chain IDs like `eip155:1`; ERC-3009 uses EIP-712 typed data and numeric chain IDs like `1`.
 
-3. **Use standard base64:** Both `sign-in-with-x` and `X-PAYMENT` headers use standard base64 with `=` padding (not URL-safe base64).
+3. **Use the live `accepts[]` values:** Do not hardcode `asset`, `pay_to`, `price`, or network selection outside the latest `402` response.
 
-4. **Nonce is single-use:** Each SIWX nonce from the challenge can only be used once and expires in 5 minutes. If auth fails, request a fresh challenge.
+4. **Use the token contract's EIP-712 domain:** Do not use a token symbol or UI label as the typed-data `name`. For example, Ethereum mainnet USDC signs as `"USD Coin"`, not `"USDC"`.
 
-5. **Fresh challenge per attempt:** Each 402 response contains a fresh nonce. Always use the nonce from the most recent 402 response.
+5. **`verifyingContract` must equal `asset`:** Sign against the exact token contract from `accepts[].asset`, not the payee address and not a guessed token address.
 
-6. **Don't hardcode addresses:** Always use `asset`, `pay_to`, `price`, and `extra` values from the live 402 response.
+6. **The sent authorization must exactly match the signed message:** `value`, `validAfter`, `validBefore`, and `nonce` in `payload.authorization` must be the stringified forms of the exact values that were signed.
+
+7. **Use standard base64 and fresh SIWX nonces:** `sign-in-with-x` and `X-PAYMENT` use standard base64 with `=` padding. Each SIWX nonce is single-use, and each new `402` gives a fresh one.
+
+8. **Retry the same payment payload before regenerating:** If a payment attempt is retriable, preserve and retry the same encoded `X-PAYMENT` first instead of immediately creating a new authorization nonce.
+
+9. **Do not mutate the request between retries:** When you add `sign-in-with-x` or `X-PAYMENT`, preserve the original method, path, query parameters, and body.
 
 ## Explorer Transaction Lookup
 
@@ -281,11 +379,13 @@ When `Payment-Response` is present, extract the transaction hash and provide an 
 
 ## Rules For Agents
 
+- Resolve the exact docs operation page before paying or querying.
 - Keep implementation direct and endpoint-specific.
 - Support both signer modes: `PRIVATE_KEY` or CDP Agent Wallet signer.
 - Confirm before the first paid mainnet request (real USDC spend).
 - If paid retry still returns `402`, report:
   1. Selected network
   2. Selected purchase amount
-  3. Wallet address used for signing
-  4. Minimal next action (fund USDC/gas or re-run SIWX + payment)
+  3. Docs page used to resolve the endpoint
+  4. Wallet address used for signing
+  5. Minimal next action (fund USDC/gas or re-run SIWX + payment)
